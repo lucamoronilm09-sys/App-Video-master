@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment / secrets - mai committare credenziali reali
+.env
+.env.local
+.env.*
+
+# Runtime data - progetti utente, media, token OAuth, log (contengono percorsi locali e segreti)
+data/*
+!data/.gitkeep
+!data/projects/
+!data/jobs/
+data/projects/*
+!data/projects/.gitkeep
+data/jobs/*
+!data/jobs/.gitkeep
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+out/
+frontend/out/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# Logs
+*.log
+logs/
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# TypeScript
+*.tsbuildinfo
