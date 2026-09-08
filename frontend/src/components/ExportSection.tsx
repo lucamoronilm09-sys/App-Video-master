@@ -37,11 +37,12 @@ function QAVerdict({ project }: { project: ProjectState }) {
   if (!qa) return null;
   if (qa.status === "approved") {
     return (
-      <p className="text-sm text-emerald-300" title={qa.checks.map(c => `${c.name}: ${c.detail}`).join("\n")}>
+      <p className="text-sm text-emerald-300" title={qa.checks?.map(c => `${c.name}: ${c.detail}`).join("\n")}>
         ✓ QA superato — durata, sync, verticali, transizioni
       </p>
     );
   }
+  if (!qa.issues || qa.issues.length === 0) return null;
   return (
     <div className="rounded-lg border border-amber-700 bg-amber-900/20 p-3">
       <p className="mb-1 text-sm font-medium text-amber-300">
@@ -110,13 +111,13 @@ export function ExportSection({ project, onSubmit, job }: ExportSectionProps) {
           <div className="h-2 overflow-hidden rounded-full bg-slate-800">
             <div
               className="h-full rounded-full bg-emerald-500 transition-all duration-500"
-              style={{ width: `${Math.round(job.progress.fraction * 100)}%` }}
+              style={{ width: `${Math.round((job.progress?.fraction ?? 0) * 100)}%` }}
             />
           </div>
           <p className="text-xs text-slate-400">
             {job.status === "queued"
               ? "In coda…"
-              : `${job.progress.stage} — ${Math.round(job.progress.fraction * 100)}%${job.progress.note ? ` · ${job.progress.note}` : ""}`}
+              : `${job.progress?.stage ?? "Elaborazione"} — ${Math.round((job.progress?.fraction ?? 0) * 100)}%${job.progress?.note ? ` · ${job.progress.note}` : ""}`}
           </p>
         </div>
       )}

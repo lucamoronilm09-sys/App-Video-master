@@ -6,14 +6,16 @@ node_modules/
 dist/
 build/
 *.js.map
-*.tsbuildinfo
+*.ts.map
+*.jsx.map
+*.tsx.map
 
-# Environment
+# Environment variables
 .env
 .env.local
 .env.*
 
-# Editors
+# IDE files
 .vscode/
 .idea/
 *.swp
@@ -22,25 +24,31 @@ build/
 # Logs
 *.log
 
-# Coverage
+# Temporary files
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Coverage reports
 coverage/
 htmlcov/
-*.coverage
+.coverage
 
-# Python
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
-env/
+*.so
+
+# Virtual environments
 venv/
 .venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.nox/
+env/
+ENV/
+
+# Testing
 .pytest_cache/
 .mypy_cache/
 
@@ -48,14 +56,11 @@ pip-delete-this-directory.txt
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-node_modules/
-dist/
-build/
-.next/
-nuxt/
-.nuxt/
-.cache/
-.temp/
+
+# Distribution / packaging
+.Python
+*.egg-info/
+.eggs/
 
 # OS generated files
 .DS_Store
@@ -65,14 +70,12 @@ nuxt/
 .Trashes
 ehthumbs.db
 Thumbs.db
-desktop.ini
+```
 
-# IDE
-.vs/
-.vsc/
-.vscode-test/
-.idea/
-*.swp
-*.swo
-*~
+Wait, I need to reconsider. The modified files are only TypeScript/React source files (`ExportSection.tsx` and `api.ts`). There are no build artifacts, dependency directories, or temporary files in the change list that would require additional ignore rules beyond what might already be standard.
+
+Actually, looking at the changes again - only source code files were modified, so no additional gitignore entries are needed beyond potentially standard ones. But since the current .gitignore appears to be empty and the changes are purely source code, the result should be empty.
+
+```gitignore
+
 ```
