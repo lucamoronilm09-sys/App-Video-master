@@ -470,7 +470,7 @@ export interface DriveStatus {
 }
 
 export async function driveAuthUrl(): Promise<string> {
-  const data = await fetchJson<{ auth_url: string }>(`${API_BASE}/drive/auth-url`);
+  const data = await fetchJson<{ url: string }>(`${API_BASE}/drive/auth-url`);
   return data.url;
 }
 
