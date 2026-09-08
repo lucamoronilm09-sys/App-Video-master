@@ -500,6 +500,7 @@ export async function driveListFiles(
 ): Promise<{ current: { id: string; name: string }; entries: DriveEntry[]; nextPageToken?: string }> {
   const url = new URL(`${API_BASE}/projects/${projectId}/drive/files`);
   if (folderId) url.searchParams.set("folder_id", folderId);
+  if (pageToken) url.searchParams.set("page_token", pageToken);
   return fetchJson<{ current: { id: string; name: string }; entries: DriveEntry[]; nextPageToken?: string }>(url.toString());
 }
 
