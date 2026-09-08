@@ -318,7 +318,8 @@ export default function ProjectPage() {
         submitDriveImportJob(
           projectId,
           fileIds,
-          folderIds
+          folderIds,
+          true
         ),
       [projectId]
     );
