@@ -171,6 +171,7 @@ export interface SettingsPatch {
 }
 
 export const API_BASE_VALUE = API_BASE;
+const DIRECT_API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const controller = new AbortController();
@@ -239,7 +240,7 @@ export async function uploadMedia(
   const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minuti per upload multipli/grandi
 
   try {
-    const res = await fetch(`${API_BASE}/projects/${projectId}/media`, {
+    const res = await fetch(`${DIRECT_API_BASE}/api/projects/${projectId}/media`, {
       method: "POST",
       signal: controller.signal,
       body: formData,
@@ -336,7 +337,7 @@ export async function uploadAudio(
   const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minuti
 
   try {
-    const res = await fetch(`${API_BASE}/projects/${projectId}/audio`, {
+    const res = await fetch(`${DIRECT_API_BASE}/api/projects/${projectId}/audio`, {
       method: "POST",
       signal: controller.signal,
       body: formData,
@@ -421,7 +422,7 @@ export async function submitDriveImportJob(
   projectId: string,
   fileIds: string[],
   folderIds: string[],
-  background: boolean = false
+  background: boolean = true
 ): Promise<ProjectState | { job: Job }> {
   const url = new URL(`${API_BASE}/projects/${projectId}/drive/import`);
   if (background) {
@@ -470,7 +471,7 @@ export interface DriveStatus {
 
 export async function driveAuthUrl(): Promise<string> {
   const data = await fetchJson<{ auth_url: string }>(`${API_BASE}/drive/auth-url`);
-  return data.auth_url;
+  return data.url;
 }
 
 export async function saveDriveCredentials(clientId: string, clientSecret: string): Promise<void> {
@@ -496,10 +497,10 @@ export async function driveDisconnect(): Promise<void> {
 export async function driveListFiles(
   projectId: string,
   folderId?: string
-): Promise<{ current: { id: string; name: string }; entries: DriveEntry[] }> {
+): Promise<{ current: { id: string; name: string }; entries: DriveEntry[]; nextPageToken?: string }> {
   const url = new URL(`${API_BASE}/projects/${projectId}/drive/files`);
   if (folderId) url.searchParams.set("folder_id", folderId);
-  return fetchJson<{ current: { id: string; name: string }; entries: DriveEntry[] }>(url.toString());
+  return fetchJson<{ current: { id: string; name: string }; entries: DriveEntry[]; nextPageToken?: string }>(url.toString());
 }
 
 export function isJobActive(job?: Job | null): boolean {
