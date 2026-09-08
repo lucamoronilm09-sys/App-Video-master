@@ -8,7 +8,7 @@ export function useProjectEvents(projectId: string): ProgressSnapshot | null {
   const [snapshot, setSnapshot] = useState<ProgressSnapshot | null>(null);
 
   useEffect(() => {
-    const src = new EventSource(`${API_BASE}/api/projects/${projectId}/events`);
+    const src = new EventSource(`${API_BASE}/projects/${projectId}/events`);
     src.onmessage = e => {
       try {
         setSnapshot(JSON.parse(e.data) as ProgressSnapshot);
