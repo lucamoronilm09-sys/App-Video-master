@@ -603,7 +603,7 @@ async def render_video(project_id: str, background: bool = False) -> dict:
             job = jobs.submit(project_id, "render")
         except jobs.JobExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
-        return JSONResponse(status_code=202, content={"job": job})
+        return JSONResponse(status_code=202, content={"job": _public_job(job)})
     state = await _run_stages(state, (("sequence", sequence.run),
                                       ("edit_director", edit_director.run),
                                       ("clip_overrides", clip_overrides.run),
@@ -736,6 +736,19 @@ def get_media_thumb(project_id: str, media_id: str,
     return FileResponse(path=str(thumb), media_type="image/jpeg")
 
 
+def _public_job(job: dict) -> dict:
+    status_map = {"queued": "pending", "running": "running", "done": "completed", "failed": "failed"}
+    return {
+        "id": job.get("job_id") or job.get("id"),
+        "kind": job.get("kind"),
+        "status": status_map.get(job.get("status"), job.get("status")),
+        "error": job.get("error"),
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+        "progress": job.get("progress"),
+    }
+
+
 def progress_payload(state: dict) -> dict:
     """Snapshot leggero per la UI realtime (M8): avanzamento, errori, esiti."""
     manifest = state.get("render_manifest") or {}
@@ -749,7 +762,7 @@ def progress_payload(state: dict) -> dict:
         "has_render": bool(manifest.get("status") == "done"),
         "qa_status": qa.get("status"),
         "updated_at": state.get("updated_at", 0),
-        "jobs": jobs.recent_for_project(state.get("project_id", ""), 5),
+        "jobs": [_public_job(j) for j in jobs.recent_for_project(state.get("project_id", ""), 5)],
     }
 
 
