@@ -67,6 +67,17 @@ export interface ProjectState {
   clips?: ClipOverride[];
   errors: { title: string; detail: string; hint?: string }[];
   updated_at: number;
+  qa_report?: {
+    status: "approved" | "rejected";
+    checks?: { name: string; passed: boolean; detail: string }[];
+    issues?: { check: string; message: string; route_to: string }[];
+  };
+  render_manifest?: {
+    status: string;
+    output?: { path: string };
+    total_sec?: number;
+    audio?: Record<string, unknown>;
+  };
 }
 
 export interface ProgressState {
