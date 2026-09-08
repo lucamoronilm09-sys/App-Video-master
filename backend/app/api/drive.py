@@ -107,13 +107,33 @@ def drive_auth_url(request: Request) -> dict:
 
 def _callback_page(ok: bool, message: str, status: int = 200) -> HTMLResponse:
     color, title = ("#34d399", "Drive collegato") if ok else ("#f87171", "Errore collegamento")
-    close = "<script>setTimeout(function(){try{window.close()}catch(e){}},1500)</script>" if ok else ""
+    if ok:
+        script = """
+<script>
+(function () {
+  try {
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage({type: "drive-connected"}, "*");
+      setTimeout(function () { window.close(); }, 600);
+    } else {
+      window.location.href = "http://localhost:3000";
+    }
+  } catch (e) {
+    window.location.href = "http://localhost:3000";
+  }
+})();
+</script>
+"""
+    else:
+        script = ""
     return HTMLResponse(
-        f"<html><body style='background:#0f172a;color:#e2e8f0;font-family:sans-serif;"
-        f"display:flex;height:100vh;align-items:center;justify-content:center;text-align:center'>"
-        f"<div><h2 style='color:{color}'>{title}</h2><p>{message}</p>"
-        f"<p style='color:#64748b;font-size:12px'>Puoi chiudere questa finestra e tornare all'app.</p>"
-        f"</div>{close}</body></html>", status_code=status)
+        "<!doctype html><html><head><meta charset='utf-8'><title>Google Drive</title></head>"
+        f"<body style='margin:0;background:#0f172a;color:#e2e8f0;font-family:Arial,sans-serif;"
+        f"display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center'>"
+        f"<div style='max-width:560px;padding:32px'><h2 style='color:{color}'>{title}</h2>"
+        f"<p>{message}</p><p style='color:#94a3b8;font-size:13px'>"
+        f"{'La finestra si chiuderà automaticamente.' if ok else 'Chiudi questa finestra e torna all’app.'}</p></div>"
+        f"{script}</body></html>", status_code=status)
 
 
 @router.get("/drive/callback", response_class=HTMLResponse)
