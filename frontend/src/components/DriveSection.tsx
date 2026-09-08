@@ -70,6 +70,7 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
   const [stack, setStack] = useState<{ id: string; name: string }[]>([]);
   const [folderName, setFolderName] = useState("Il mio Drive");
   const [entries, setEntries] = useState<DriveEntry[]>([]);
+  const [nextPageToken, setNextPageToken] = useState<string | undefined>(undefined);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [selectedFolders, setSelectedFolders] = useState<{ id: string; name: string }[]>([]);
   const [sharedView, setSharedView] = useState(false);
@@ -116,16 +117,17 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
     };
   }, [refreshStatus]);
 
-  const loadFolder = useCallback(async (fid: string, shared = false) => {
+  const loadFolder = useCallback(async (fid: string, shared = false, pageToken?: string) => {
     setBusy(true);
     setError(null);
     console.info(`[Drive] lettura cartella fid=${fid} shared=${shared}`);
     try {
-      const data = await driveListFiles(projectId, fid);
+      const data = await driveListFiles(projectId, fid, pageToken);
       console.info(`[Drive] cartella '${data.current.name}': ${data.entries.length} voci`);
       setFolderId(data.current.id);
       setFolderName(data.current.name);
-      setEntries(data.entries);
+      setEntries(pageToken ? prev => [...prev, ...data.entries] : data.entries);
+      setNextPageToken(data.nextPageToken);
       setSharedView(shared);
       if (!shared) {
         if (fid === "root") {
@@ -346,6 +348,16 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
             </button>
           </div>
 
+
+          {nextPageToken && !busy && (
+            <button
+              type="button"
+              onClick={() => void loadFolder(folderId, sharedView, nextPageToken)}
+              className="w-full rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-300 hover:bg-slate-700"
+            >
+              Carica altri file
+            </button>
+          )}
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2 text-sm">
               {stack.length > 0 && (
