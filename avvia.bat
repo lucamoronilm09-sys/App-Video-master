@@ -38,6 +38,7 @@ goto wait_backend
 echo Backend OK.
 
 echo [2/4] Frontend su http://localhost:3000 ...
+if exist frontend\.next rmdir /s /q frontend\.next
 if not exist frontend\.next (
   echo Build produzione mancante, la creo...
   cd frontend
