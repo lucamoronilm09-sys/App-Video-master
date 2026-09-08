@@ -111,7 +111,7 @@ function ClipRow({ entry, index, isLast, media, overridden, disabled, onPatch, o
           >
             <option value="auto">Auto{entry.ken_burns ? `: ${MOVEMENT_LABEL[entry.ken_burns.movement] ?? entry.ken_burns.movement}` : ""}</option>
             {CLIP_MOVEMENTS.map(m => (
-              <option key={m} value={m}>{MOVEMENT_LABEL[m] ?? m}</option>
+              <option key={m.value} value={m.value}>{MOVEMENT_LABEL[m.value] ?? m.label}</option>
             ))}
           </select>
         ) : (
@@ -219,7 +219,7 @@ export function MontageSection({ project, onGenerate, onPatchClip, onResetClip, 
         <div className="space-y-3">
           <p className="text-sm text-slate-300">
             {edl.length} clip · totale{" "}
-            <strong>{manifest ? manifest.total_sec.toFixed(1) : "…"}s</strong>
+            <strong>{manifest?.total_sec ? manifest.total_sec.toFixed(1) : "…"}s</strong>
             {manifest?.audio ? " · con audio" : " · senza audio"}
           </p>
           <ol className="space-y-1">

@@ -1,14 +1,6 @@
 "use client";
 
-import type { BackgroundFill, MediaItem } from "@/lib/api";
-
-export interface OutputSpec {
-  resolution: string;
-  fps: number;
-  transition_duration?: number;
-  background_fill?: "cover" | "contain";
-  vcodec?: "h264" | "h265";
-}
+import type { BackgroundFill, MediaItem, OutputSpec } from "@/lib/api";
 
 interface ProjectSettingsProps {
   spec: OutputSpec;

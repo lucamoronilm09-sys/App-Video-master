@@ -7,6 +7,7 @@ Copre scenari limite non testati nella suite principale:
 - Crash/kill del worker a metà render (cleanup file parziali)
 """
 import asyncio
+import io
 import os
 import signal
 import subprocess
@@ -17,6 +18,7 @@ from unittest.mock import patch
 import pytest
 from app.agents import sequence, timeline_compiler, render
 from app.pipeline import state as state_store
+from PIL import Image
 
 
 @pytest.fixture()
@@ -29,9 +31,6 @@ def isolated_project(tmp_path, monkeypatch):
     state_store.ensure_project_dirs(state["project_id"])
     
     # Aggiungi 1 foto di test
-    from PIL import Image
-    import io
-    
     media_dir = state_store.media_dir(state["project_id"])
     photo_path = media_dir / "test_photo.jpg"
     img = Image.new("RGB", (640, 480), "blue")
@@ -47,6 +46,37 @@ def isolated_project(tmp_path, monkeypatch):
     state_store.save_state(state)
     
     return state
+
+
+@pytest.fixture
+def sample_photo():
+    """Fixture per un'immagine JPEG di test."""
+    img = Image.new("RGB", (640, 480), "green")
+    buf = io.BytesIO()
+    img.save(buf, "JPEG")
+    return buf.getvalue()
+
+
+@pytest.fixture
+def sample_video(tmp_path):
+    """Fixture per un video MP4 di test creato con ffmpeg."""
+    video_path = tmp_path / "sample.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi",
+        "-i", "testsrc=size=640x480:rate=30",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+        "-t", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-shortest",
+        str(video_path)
+    ], check=True, capture_output=True)
+    return video_path.read_bytes()
+
+
+@pytest.fixture()
+def isolated_projects(tmp_path, monkeypatch):
+    """Fixture per progetti isolati (compatibilità con altri test)."""
+    monkeypatch.setattr(state_store, "PROJECTS_DIR", tmp_path)
+    return tmp_path
 
 
 def _probe_duration(path) -> float:
@@ -268,8 +298,9 @@ async def test_edl_with_zero_transitions(isolated_project):
     project_id = isolated_project["project_id"]
     state = state_store.load_state(project_id)
     
-    # Imposta transizioni a 0
-    state["settings"]["transition_sec"] = 0
+    # Imposta transizioni a 0 nell'output_spec
+    state.setdefault("output_spec", {})
+    state["output_spec"]["transition_sec"] = 0
     
     state = await sequence.run(state)
     state = await timeline_compiler.run(state)
