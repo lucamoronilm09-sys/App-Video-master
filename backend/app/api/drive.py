@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from googleapiclient.errors import HttpError
 
 from app.agents import drive_import, intake, normalizer, sequence
-from app.api.routes import _get_state_or_404, _run_stages
+from app.api.routes import _get_state_or_404, _run_stages, _public_job
 from app.api.schemas import DriveCredentialsRequest, DriveImportRequest, ProjectState
 from app.jobs import manager as jobs
 from app.pipeline import state as state_store
@@ -195,7 +195,7 @@ async def drive_import_media(project_id: str, body: DriveImportRequest,
                               {"file_ids": body.file_ids, "folder_ids": body.folder_ids})
         except jobs.JobExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
-        return JSONResponse(status_code=202, content={"job": job})
+        return JSONResponse(status_code=202, content={"job": _public_job(job)})
     state["drive_import_request"] = {"file_ids": body.file_ids, "folder_ids": body.folder_ids}
     state = await _run_stages(state, (("drive_import", drive_import.run),
                                       ("intake", intake.run),
