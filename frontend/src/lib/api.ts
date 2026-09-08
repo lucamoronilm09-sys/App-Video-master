@@ -50,6 +50,7 @@ export interface Job {
   error?: string;
   created_at: string;
   updated_at: string;
+  progress?: { fraction: number; label?: string; note?: string };
 }
 
 export interface PipelineLogEntry {
@@ -268,12 +269,14 @@ export interface DriveEntry {
 }
 
 export interface DriveStatus {
+  configured: boolean;
   connected: boolean;
   email?: string;
 }
 
-export async function driveAuthUrl(): Promise<{ auth_url: string }> {
-  return fetchJson<{ auth_url: string }>(`${API_BASE}/drive/auth-url`);
+export async function driveAuthUrl(): Promise<string> {
+  const data = await fetchJson<{ auth_url: string }>(`${API_BASE}/drive/auth-url`);
+  return data.auth_url;
 }
 
 export async function saveDriveCredentials(projectId: string, code: string): Promise<void> {
@@ -295,11 +298,11 @@ export async function driveDisconnect(): Promise<void> {
 
 export async function driveListFiles(
   projectId: string,
-  q?: string
-): Promise<{ files: DriveEntry[] }> {
+  folderId?: string
+): Promise<{ current: { id: string; name: string }; entries: DriveEntry[] }> {
   const url = new URL(`${API_BASE}/projects/${projectId}/drive/files`);
-  if (q) url.searchParams.set("q", q);
-  return fetchJson<{ files: DriveEntry[] }>(url.toString());
+  if (folderId) url.searchParams.set("folder_id", folderId);
+  return fetchJson<{ current: { id: string; name: string }; entries: DriveEntry[] }>(url.toString());
 }
 
 export function isJobActive(job?: Job | null): boolean {

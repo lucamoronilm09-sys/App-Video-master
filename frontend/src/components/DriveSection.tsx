@@ -237,7 +237,7 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
     console.info(`[Drive] avvio import: ${nFiles} file + ${nFolders} cartelle`);
     try {
       const started = await onSubmitImport(selectedFiles, selectedFolders.map(f => f.id));
-      console.info(`[Drive] import accodato job=${started.job_id} status=${started.status}; avanzamento via SSE`);
+      console.info(`[Drive] import accodato job=${started.id} status=${started.status}; avanzamento via SSE`);
       setSelectedFiles([]);
       setSelectedFolders([]);
     } catch (err) {
@@ -428,12 +428,12 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
               <div className="h-2 overflow-hidden rounded-full bg-slate-800">
                 <div
                   className="h-full rounded-full bg-sky-500 transition-all duration-500"
-                  style={{ width: `${Math.round((job && isJobActive(job) ? job.progress.fraction : 0) * 100)}%` }}
+                  style={{ width: `${Math.round((job && isJobActive(job) ? (job.progress?.fraction ?? 0) : 0) * 100)}%` }}
                 />
               </div>
               <p className="text-xs text-slate-500">
                 {job && isJobActive(job) && job.status === "running"
-                  ? `Download da Drive… ${Math.round(job.progress.fraction * 100)}%${job.progress.note ? ` · ${job.progress.note}` : ""}`
+                  ? `Download da Drive… ${Math.round((job.progress?.fraction ?? 0) * 100)}%${job.progress?.note ? ` · ${job.progress.note}` : ""}`
                   : "Download in corso… i file appariranno in timeline da soli. Se fallisce, verifica la connessione e che il backend sia raggiungibile."}
               </p>
               {stuckWarning && (
