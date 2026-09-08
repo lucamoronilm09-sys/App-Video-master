@@ -11,11 +11,12 @@ import {
   type DriveEntry,
   type DriveStatus,
   type Job,
+  type ProjectState,
 } from "@/lib/api";
 
 interface DriveSectionProps {
   projectId: string;
-  onSubmitImport: (fileIds: string[], folderIds: string[]) => Promise<Job>;
+  onSubmitImport: (fileIds: string[], folderIds: string[]) => Promise<Job | { job: Job } | ProjectState>;
   job?: Job | null;
 }
 
@@ -236,8 +237,10 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
     const nFolders = selectedFolders.length;
     console.info(`[Drive] avvio import: ${nFiles} file + ${nFolders} cartelle`);
     try {
-      const started = await onSubmitImport(selectedFiles, selectedFolders.map(f => f.id));
-      console.info(`[Drive] import accodato job=${started.id} status=${started.status}; avanzamento via SSE`);
+      const result = await onSubmitImport(selectedFiles, selectedFolders.map(f => f.id));
+      // Il backend può ritornare ProjectState (sync) o {job: Job} (background)
+      const jobId = 'job' in result ? result.job.id : ('project_id' in result ? 'inline' : 'unknown');
+      console.info(`[Drive] import accodato job=${jobId}; avanzamento via SSE`);
       setSelectedFiles([]);
       setSelectedFolders([]);
     } catch (err) {

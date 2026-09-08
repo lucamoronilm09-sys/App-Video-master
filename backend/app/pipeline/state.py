@@ -78,7 +78,7 @@ def thumbs_dir(project_id: str) -> Path:
 def ensure_project_dirs(project_id: str) -> Path:
     """Crea (se assenti) le cartella di lavoro del progetto."""
     d = project_dir(project_id)
-    for sub in (MEDIA_SUBDIR, AUDIO_SUBDIR, OUTPUT_SUBDIR):
+    for sub in (MEDIA_SUBDIR, AUDIO_SUBDIR, OUTPUT_SUBDIR, THUMBS_SUBDIR):
         (d / sub).mkdir(parents=True, exist_ok=True)
     return d
 

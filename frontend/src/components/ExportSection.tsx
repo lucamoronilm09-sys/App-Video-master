@@ -5,7 +5,7 @@ import { downloadUrl, isJobActive, type Job, type ProjectState } from "@/lib/api
 
 interface ExportSectionProps {
   project: ProjectState;
-  onSubmit: () => Promise<Job>;
+  onSubmit: () => Promise<ProjectState>;
   job?: Job | null;
 }
 
@@ -115,25 +115,25 @@ export function ExportSection({ project, onSubmit, job }: ExportSectionProps) {
             />
           </div>
           <p className="text-xs text-slate-400">
-            {job.status === "queued"
+            {job.status === "pending"
               ? "In coda…"
-              : `${job.progress?.stage ?? "Elaborazione"} — ${Math.round((job.progress?.fraction ?? 0) * 100)}%${job.progress?.note ? ` · ${job.progress.note}` : ""}`}
+              : `${job.progress?.label ?? "Elaborazione"} — ${Math.round((job.progress?.fraction ?? 0) * 100)}%${job.progress?.note ? ` · ${job.progress.note}` : ""}`}
           </p>
         </div>
       )}
 
-      {done && manifest ? (
+      {done && manifest?.output ? (
         <div className="space-y-3">
           <video
-            key={manifest.output.rendered_at ?? manifest.total_sec}
+            key={manifest.total_sec ?? 0}
             controls
             preload="metadata"
             src={src}
             className="aspect-video w-full rounded-lg bg-black"
           />
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-300">
-            <span>{manifest.total_sec.toFixed(1)}s</span>
-            <span>{manifest.output.resolution} · {manifest.output.fps}fps</span>
+            <span>{manifest.total_sec?.toFixed(1) ?? "?"}s</span>
+            <span>{manifest.output.resolution ?? "?"} · {manifest.output.fps ?? "?"}fps</span>
             {manifest.output.size_bytes ? <span>{formatBytes(manifest.output.size_bytes)}</span> : null}
             <a
               href={src}

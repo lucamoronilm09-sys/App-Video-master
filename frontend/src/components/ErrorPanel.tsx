@@ -4,7 +4,7 @@ import { useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 
 interface ErrorPanelProps {
-  errors: { title?: string; detail: string; hint?: string }[];
+  errors: { title?: string; detail?: string; hint?: string }[];
   onClear: () => Promise<void>;
   busy?: boolean;
 }
@@ -47,7 +47,7 @@ export function ErrorPanel({ errors, onClear, busy }: ErrorPanelProps) {
       <ul className="space-y-3">
         {errors.map((e, i) => {
           const isExpanded = expandedIndices.has(i);
-          const summary = e.title ?? extractReadableMessage(e.detail);
+          const summary = e.title ?? (e.detail ? extractReadableMessage(e.detail) : "Errore");
           const hasDetails = !e.title || summary !== e.detail;
 
           return (

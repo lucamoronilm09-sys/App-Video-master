@@ -48,7 +48,7 @@ MAX_FILES_PER_REQUEST = 50
 MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024  # 500MB
 
 ALLOWED_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".ts", ".mts"}
-ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp", ".tiff", ".tif"}
+ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp", ".tiff", ".tif", ".gif"}
 ALLOWED_AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".oga", ".m4a", ".flac", ".opus", ".aac", ".wma"}
 
 # Magic bytes per validazione contenuto reale
@@ -59,6 +59,9 @@ VIDEO_MAGIC = {
 IMAGE_MAGIC = {
     b"\xFF\xD8\xFF": "jpeg", 
     b"\x89\x50\x4E\x47": "png",
+    b"GIF87a": "gif",
+    b"GIF89a": "gif",
+    b"RIFF": "webp",  # WebP usa RIFF header
 }
 # (La validazione audio è per-estensione in _validate_audio_magic: ID3/frame-sync
 # per gli MP3, fLaC, ASF per i WMA, OggS, RIFF/RF64, ftyp — vedi sotto.)
@@ -185,13 +188,39 @@ def _validate_magic_bytes(content: bytes, ext: str) -> bool:
         if b'\x00' in content[:512]:
             return True
     
-    # Immagini: JPEG, PNG
+    # Immagini: validazione per formati specifici
     if ext in ALLOWED_IMAGE_EXTS:
+        # Controllo magic bytes specifici
         for magic, fmt in IMAGE_MAGIC.items():
             if content.startswith(magic):
                 return True
-        # Fallback per formati meno comuni
-        if content.startswith(b"\xFF\xD8") or b"ftyp" in content[:32]:
+        
+        # JPEG: FF D8 FF
+        if content.startswith(b"\xFF\xD8"):
+            return True
+        
+        # PNG: 89 50 4E 47 0D 0A 1A 0A
+        if content.startswith(b"\x89PNG"):
+            return True
+        
+        # GIF: GIF87a o GIF89a
+        if content.startswith(b"GIF8"):
+            return True
+        
+        # WebP: RIFF....WEBP
+        if content.startswith(b"RIFF") and b"WEBP" in content[:32]:
+            return True
+        
+        # BMP: BM header
+        if content.startswith(b"BM"):
+            return True
+        
+        # TIFF: II (little-endian) o MM (big-endian)
+        if content.startswith(b"II\x2A\x00") or content.startswith(b"MM\x00\x2A"):
+            return True
+        
+        # HEIC/HEIF: ftyp box tipico
+        if b"ftyp" in content[:32] or b"heic" in content[:64]:
             return True
     
     return False

@@ -1,6 +1,6 @@
 "use client";
 
-import type { PipelineEvent } from "@/lib/api";
+import type { PipelineLogEntry } from "@/lib/api";
 
 const STAGES: { id: string; label: string }[] = [
   { id: "drive_import", label: "Drive" },
@@ -16,11 +16,11 @@ const STAGES: { id: string; label: string }[] = [
 
 type StageState = "pending" | "running" | "done" | "failed";
 
-function stageState(log: PipelineEvent[], stage: string): StageState {
+function stageState(log: PipelineLogEntry[], stage: string): StageState {
   const entries = log.filter(e => e.stage === stage);
   if (entries.some(e => e.status === "failed")) return "failed";
   if (entries.some(e => e.status === "running")) return "running";
-  if (entries.some(e => e.status === "done")) return "done";
+  if (entries.some(e => e.status === "completed")) return "done";
   return "pending";
 }
 
@@ -32,7 +32,7 @@ const DOT: Record<StageState, string> = {
 };
 
 /** M8: barra di avanzamento pipeline in tempo reale (da SSE). */
-export function PipelineProgress({ log }: { log: PipelineEvent[] }) {
+export function PipelineProgress({ log }: { log: PipelineLogEntry[] }) {
   if (log.length === 0) return null;
   return (
     <ol aria-label="Avanzamento pipeline" className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-2.5">
