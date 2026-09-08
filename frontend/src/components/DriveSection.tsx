@@ -87,8 +87,8 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
    *  heartbeat, l'import non deve sembrare "in corso" all'infinito. */
   const stuckWarning: string | null = (() => {
     if (!job || !isJobActive(job)) return null;
-    const elapsed = nowSec - (job.created_at || nowSec);
-    const staleFor = nowSec - (job.updated_at || nowSec);
+    const elapsed = nowSec - (new Date(job.created_at).getTime() / 1000);
+    const staleFor = nowSec - (new Date(job.updated_at).getTime() / 1000);
     if (staleFor > STALE_AFTER_SEC) {
       const mins = Math.max(1, Math.round(staleFor / 60));
       return `Nessun avanzamento da oltre ${mins} min: la connessione con il server potrebbe essersi interrotta. Ricarica la pagina: se i file non compaiono, riprova l'import.`;
@@ -120,7 +120,7 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
     setError(null);
     console.info(`[Drive] lettura cartella fid=${fid} shared=${shared}`);
     try {
-      const data = await driveListFiles(projectId, fid, undefined, shared);
+      const data = await driveListFiles(projectId, fid);
       console.info(`[Drive] cartella '${data.current.name}': ${data.entries.length} voci`);
       setFolderId(data.current.id);
       setFolderName(data.current.name);

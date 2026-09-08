@@ -4,7 +4,7 @@ import { useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 
 interface ErrorPanelProps {
-  errors: { stage: string; message: string }[];
+  errors: { title?: string; detail: string; hint?: string }[];
   onClear: () => Promise<void>;
   busy?: boolean;
 }
@@ -47,14 +47,13 @@ export function ErrorPanel({ errors, onClear, busy }: ErrorPanelProps) {
       <ul className="space-y-3">
         {errors.map((e, i) => {
           const isExpanded = expandedIndices.has(i);
-          // Cerca di estrarre un messaggio più leggibile
-          const summary = extractReadableMessage(e.message);
-          const hasDetails = summary !== e.message;
+          const summary = e.title ?? extractReadableMessage(e.detail);
+          const hasDetails = !e.title || summary !== e.detail;
 
           return (
             <li key={i} className="rounded border border-rose-800/50 bg-rose-950/30 p-3">
               <div className="flex items-start gap-2">
-                <span className="mt-0.5 text-xs font-mono text-rose-400">[{e.stage}]</span>
+                <span className="mt-0.5 text-xs font-mono text-rose-400">[{e.title ?? "Errore"}]</span>
                 <div className="flex-1">
                   <p className="text-sm text-rose-200">{summary}</p>
                   
@@ -77,10 +76,14 @@ export function ErrorPanel({ errors, onClear, busy }: ErrorPanelProps) {
                       
                       {isExpanded && (
                         <pre className="mt-2 max-h-48 overflow-x-auto overflow-y-scroll rounded bg-rose-950/50 p-2 text-xs font-mono text-rose-300/80">
-                          {e.message}
+                          {e.detail}
                         </pre>
                       )}
                     </div>
+                  )}
+                  
+                  {e.hint && (
+                    <p className="mt-2 text-xs text-rose-300/70">Suggerimento: {e.hint}</p>
                   )}
                 </div>
               </div>
@@ -115,7 +118,6 @@ function extractReadableMessage(rawMessage: string): string {
     }
   }
 
-  // Se è un errore generico, ritorna il primo rigo significativo
   const lines = rawMessage.split("\n").filter(l => l.trim().length > 0);
   if (lines.length > 1) {
     return lines[0].substring(0, 100) + (lines[0].length > 100 ? "..." : "");

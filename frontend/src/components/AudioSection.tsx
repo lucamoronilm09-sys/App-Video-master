@@ -4,7 +4,7 @@ import { useRef, useState, type ChangeEvent } from "react";
 import type { AudioInfo } from "@/lib/api";
 
 interface AudioSectionProps {
-  audio: AudioInfo;
+  audio?: AudioInfo;
   onUpload: (file: File) => Promise<void>;
   busy?: boolean;
 }
@@ -26,8 +26,8 @@ export function AudioSection({ audio, onUpload, busy }: AudioSectionProps) {
     }
   };
 
-  const fileName = audio.path ? audio.path.split(/[/\\]/).pop() : null;
-  const hasAudio = !!audio.path;
+  const fileName = audio?.filename ? audio.filename.split(/[/\\]/).pop() : null;
+  const hasAudio = !!audio?.filename;
 
   return (
     <section aria-label="Traccia audio" className="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
@@ -68,30 +68,9 @@ export function AudioSection({ audio, onUpload, busy }: AudioSectionProps) {
       ) : (
         <div className="space-y-3">
           <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-300">
-            <span className="truncate" title={audio.path ?? ""}>🎵 {fileName}</span>
-            <span>{audio.duration_sec.toFixed(1)}s</span>
-            <span title="Battiti per minuto stimati">
-              {audio.bpm > 0 ? `${audio.bpm.toFixed(0)} BPM` : "BPM non rilevato"}
-            </span>
-            <span title="Marker strutturali (uno per battuta) per la sincronizzazione">
-              {audio.beat_markers_sec.length} marker
-            </span>
+            <span className="truncate" title={audio?.filename ?? ""}>🎵 {fileName}</span>
+            <span>{audio.duration_seconds.toFixed(1)}s</span>
           </div>
-          {audio.energy_curve.length > 0 && (
-            <div
-              className="flex h-10 items-end gap-[2px]"
-              aria-label="Curva di energia"
-              title="Energia del brano (1 barra = 1 secondo)"
-            >
-              {audio.energy_curve.map((v, i) => (
-                <div
-                  key={i}
-                  className="min-w-[3px] flex-1 rounded-sm bg-emerald-500/70"
-                  style={{ height: `${Math.max(4, Math.round(v * 100))}%` }}
-                />
-              ))}
-            </div>
-          )}
         </div>
       )}
 

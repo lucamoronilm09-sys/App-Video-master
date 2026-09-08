@@ -1,10 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+
+import {
+  useParams,
+  useRouter,
+} from "next/navigation";
+
 import {
   clearErrors,
-  deleteProject,
   getProject,
   patchClipOverride,
   planEdit,
@@ -21,7 +30,9 @@ import {
   type ProjectState,
   type SettingsPatch,
 } from "@/lib/api";
+
 import { useProjectEvents } from "@/hooks/useProjectEvents";
+
 import { UploadZone } from "@/components/UploadZone";
 import { DriveSection } from "@/components/DriveSection";
 import { AudioSection } from "@/components/AudioSection";
@@ -35,261 +46,679 @@ import { ErrorPanel } from "@/components/ErrorPanel";
 export default function ProjectPage() {
   const params = useParams();
   const router = useRouter();
+
   const projectId = params.id as string;
 
-  const [project, setProject] = useState<ProjectState | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [timelineBusy, setTimelineBusy] = useState(false);
-  const [settingsBusy, setSettingsBusy] = useState(false);
-  const [audioBusy, setAudioBusy] = useState(false);
-  const [editBusy, setEditBusy] = useState(false);
-  const [clearBusy, setClearBusy] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const progress = useProjectEvents(projectId);
-  const lastSyncRef = useRef(0);
-  const syncingRef = useRef(false);
+  const [project, setProject] =
+    useState<ProjectState | null>(null);
 
-  /** Ultimo job noto del kind (qualunque stato): così un import/render
-   *  fallito resta visibile con il suo errore invece di sparire in silenzio.
-   *  recent_for_project ordina per updated_at desc: il primo match è il più recente. */
-  const lastJob = (kind: Job["kind"]): Job | null => {
-    const found = (progress?.jobs ?? []).find(j => j.kind === kind);
-    return found ?? null;
+  const [loading, setLoading] =
+    useState(true);
+
+  const [error, setError] =
+    useState<string | null>(null);
+
+  const [timelineBusy, setTimelineBusy] =
+    useState(false);
+
+  const [settingsBusy, setSettingsBusy] =
+    useState(false);
+
+  const [audioBusy, setAudioBusy] =
+    useState(false);
+
+  const [editBusy, setEditBusy] =
+    useState(false);
+
+  const [clearBusy, setClearBusy] =
+    useState(false);
+
+  const progress =
+    useProjectEvents(projectId);
+
+  const lastSyncRef =
+    useRef(0);
+
+  const syncingRef =
+    useRef(false);
+
+  const lastJob = (
+    kind: Job["kind"]
+  ): Job | null => {
+    return (
+      progress?.jobs ?? []
+    ).find(
+      (j: Job) => j.kind === kind
+    ) ?? null;
   };
 
   useEffect(() => {
     const load = async () => {
       try {
         setLoading(true);
-        const data = await getProject(projectId);
+
+        const data =
+          await getProject(projectId);
+
         setProject(data);
         setError(null);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Errore caricamento progetto");
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Errore caricamento progetto"
+        );
       } finally {
         setLoading(false);
       }
     };
+
     load();
   }, [projectId]);
 
-  const handleUploadComplete = useCallback(async () => {
-    try {
-      setProject(await getProject(projectId));
-    } catch {
-      // UploadZone mostra gia' il proprio errore; qui basta non rompere lo state
-    }
-  }, [projectId]);
+  const handleUploadComplete =
+    useCallback(async () => {
+      try {
+        setProject(
+          await getProject(projectId)
+        );
+      } catch {
+        // UploadZone mostra già l'errore.
+      }
+    }, [projectId]);
 
-  /** Riordino ottimistico: aggiorna subito la UI, conferma dal server, rollback in caso di errore. */
-  const handleReorder = useCallback(async (mediaIds: string[]) => {
-    const prev = project;
-    if (!prev) return;
-    const byId = new Map(prev.media.map(m => [m.id, m]));
-    setProject({
-      ...prev,
-      media: mediaIds.map((id, i) => ({ ...byId.get(id)!, order_index: i })),
-    });
-    setTimelineBusy(true);
-    try {
-      setProject(await reorderMedia(projectId, mediaIds));
-    } catch (err) {
-      setProject(prev);
-      throw err;
-    } finally {
-      setTimelineBusy(false);
-    }
-  }, [project, projectId]);
+  const handleReorder =
+    useCallback(
+      async (mediaIds: string[]) => {
+        const prev = project;
 
-  const handleToggleFill = useCallback(async (mediaId: string, fill: BackgroundFill) => {
-    setTimelineBusy(true);
-    try {
-      setProject(await updateMediaFill(projectId, mediaId, fill));
-    } finally {
-      setTimelineBusy(false);
-    }
-  }, [projectId]);
+        if (!prev) {
+          return;
+        }
 
-  const handleSettings = useCallback(async (patch: SettingsPatch) => {
-    setSettingsBusy(true);
-    try {
-      setProject(await updateSettings(projectId, patch));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Salvataggio impostazioni fallito");
-    } finally {
-      setSettingsBusy(false);
-    }
-  }, [projectId]);
+        const byId =
+          new Map(
+            prev.media.map((m) => [
+              m.id,
+              m,
+            ])
+          );
 
-  const handleAudioUpload = useCallback(async (file: File) => {
-    setAudioBusy(true);
-    try {
-      setProject(await uploadAudio(projectId, file));
-    } finally {
-      setAudioBusy(false);
-    }
-  }, [projectId]);
+        setProject({
+          ...prev,
+          media: mediaIds.map(
+            (id, i) => ({
+              ...byId.get(id)!,
+              order_index: i,
+            })
+          ),
+        });
 
-  const handleGenerateEdit = useCallback(async () => {
-    setEditBusy(true);
-    try {
-      setProject(await planEdit(projectId));
-    } finally {
-      setEditBusy(false);
-    }
-  }, [projectId]);
+        setTimelineBusy(true);
 
-  /** Ritocco manuale di una clip: il server ricompila il piano, qui aggiorniamo lo state. */
-  const handlePatchClip = useCallback(async (mediaId: string, patch: ClipOverride) => {
-    setEditBusy(true);
-    try {
-      setProject(await patchClipOverride(projectId, mediaId, patch));
-    } finally {
-      setEditBusy(false);
-    }
-  }, [projectId]);
+        try {
+          setProject(
+            await reorderMedia(
+              projectId,
+              mediaIds
+            )
+          );
+        } catch (err) {
+          setProject(prev);
+          throw err;
+        } finally {
+          setTimelineBusy(false);
+        }
+      },
+      [project, projectId]
+    );
 
-  const handleResetClip = useCallback(async (mediaId: string) => {
-    setEditBusy(true);
-    try {
-      setProject(await resetClipOverride(projectId, mediaId));
-    } finally {
-      setEditBusy(false);
-    }
-  }, [projectId]);
+  const handleToggleFill =
+    useCallback(
+      async (
+        mediaId: string,
+        fill: BackgroundFill
+      ) => {
+        setTimelineBusy(true);
 
-  // Submit in background (coda job): il completamento arriva via SSE + sync.
-  const handleSubmitRender = useCallback(
-    () => submitRenderJob(projectId),
-    [projectId],
-  );
+        try {
+          setProject(
+            await updateMediaFill(
+              projectId,
+              mediaId,
+              fill
+            )
+          );
+        } finally {
+          setTimelineBusy(false);
+        }
+      },
+      [projectId]
+    );
 
-  const handleSubmitDriveImport = useCallback(
-    (fileIds: string[], folderIds: string[]) =>
-      submitDriveImportJob(projectId, fileIds, folderIds),
-    [projectId],
-  );
+  const handleSettings =
+    useCallback(
+      async (
+        patch: SettingsPatch
+      ) => {
+        setSettingsBusy(true);
 
-  const handleClearErrors = useCallback(async () => {
-    setClearBusy(true);
-    try {
-      setProject(await clearErrors(projectId));
-    } finally {
-      setClearBusy(false);
-    }
-  }, [projectId]);
+        try {
+          setProject(
+            await updateSettings(
+              projectId,
+              patch
+            )
+          );
+        } catch (err) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Salvataggio impostazioni fallito"
+          );
+        } finally {
+          setSettingsBusy(false);
+        }
+      },
+      [projectId]
+    );
 
-  // Sync realtime (M8): se lo state remoto cambia (SSE), ricarica throttled.
+  const handleAudioUpload =
+    useCallback(
+      async (file: File) => {
+        setAudioBusy(true);
+
+        try {
+          setProject(
+            await uploadAudio(
+              projectId,
+              file
+            )
+          );
+        } finally {
+          setAudioBusy(false);
+        }
+      },
+      [projectId]
+    );
+
+  const handleGenerateEdit =
+    useCallback(
+      async () => {
+        setEditBusy(true);
+
+        try {
+          setProject(
+            await planEdit(projectId)
+          );
+        } finally {
+          setEditBusy(false);
+        }
+      },
+      [projectId]
+    );
+
+  const handlePatchClip =
+    useCallback(
+      async (
+        mediaId: string,
+        patch: ClipOverride
+      ) => {
+        setEditBusy(true);
+
+        try {
+          setProject(
+            await patchClipOverride(
+              projectId,
+              mediaId,
+              patch
+            )
+          );
+        } finally {
+          setEditBusy(false);
+        }
+      },
+      [projectId]
+    );
+
+  const handleResetClip =
+    useCallback(
+      async (mediaId: string) => {
+        setEditBusy(true);
+
+        try {
+          setProject(
+            await resetClipOverride(
+              projectId,
+              mediaId
+            )
+          );
+        } finally {
+          setEditBusy(false);
+        }
+      },
+      [projectId]
+    );
+
+  const handleSubmitRender =
+    useCallback(
+      () =>
+        submitRenderJob(
+          projectId
+        ),
+      [projectId]
+    );
+
+  const handleSubmitDriveImport =
+    useCallback(
+      (
+        fileIds: string[],
+        folderIds: string[]
+      ) =>
+        submitDriveImportJob(
+          projectId,
+          fileIds,
+          folderIds
+        ),
+      [projectId]
+    );
+
+  const handleClearErrors =
+    useCallback(async () => {
+      setClearBusy(true);
+
+      try {
+        setProject(
+          await clearErrors(
+            projectId
+          )
+        );
+      } finally {
+        setClearBusy(false);
+      }
+    }, [projectId]);
+
   useEffect(() => {
-    if (!progress || !project || syncingRef.current) return;
-    if (progress.updated_at <= project.updated_at) return;
-    if (Date.now() - lastSyncRef.current < 3000) return;
-    lastSyncRef.current = Date.now();
+    if (
+      !progress ||
+      !project ||
+      syncingRef.current
+    ) {
+      return;
+    }
+
+    if (
+      progress.updated_at <=
+      project.updated_at
+    ) {
+      return;
+    }
+
+    if (
+      Date.now() -
+        lastSyncRef.current <
+      3000
+    ) {
+      return;
+    }
+
+    lastSyncRef.current =
+      Date.now();
+
     syncingRef.current = true;
+
     getProject(projectId)
       .then(setProject)
       .catch(() => null)
       .finally(() => {
         syncingRef.current = false;
       });
-  }, [progress, project, projectId]);
+  }, [
+    progress,
+    project,
+    projectId,
+  ]);
 
   if (loading) {
     return (
-      <main className="mx-auto flex min-h-screen max-w-3xl flex-col items-center justify-center gap-8 px-6">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-emerald-400 border-t-transparent" />
-        <p className="text-slate-400">Caricamento progetto&hellip;</p>
+      <main className="app-shell flex min-h-screen items-center justify-center px-6">
+
+        <div className="text-center">
+
+          <div className="glow mx-auto h-11 w-11 animate-spin rounded-full border-2 border-violet-400 border-t-transparent" />
+
+          <p className="mt-5 text-sm text-slate-400">
+            Preparazione workspace…
+          </p>
+
+        </div>
+
       </main>
     );
   }
 
   if (error && !project) {
     return (
-      <main className="mx-auto flex min-h-screen max-w-3xl flex-col items-center justify-center gap-4 px-6 text-center">
-        <p className="text-rose-400">{error}</p>
-        <button
-          onClick={() => router.push("/")}
-          className="text-emerald-400 hover:underline"
-        >
-          Torna alla home
-        </button>
+      <main className="app-shell flex min-h-screen items-center justify-center px-6">
+
+        <div className="surface max-w-md rounded-3xl p-8 text-center">
+
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-400/10 text-rose-300">
+            !
+          </div>
+
+          <p className="mt-4 text-rose-300">
+            {error}
+          </p>
+
+          <button
+            onClick={() =>
+              router.push("/")
+            }
+            className="mt-5 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-950"
+          >
+            Torna alla home
+          </button>
+
+        </div>
+
       </main>
     );
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-6 py-12">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Progetto {project?.project_id?.slice(0, 8)}</h1>
-          <p className="text-sm text-slate-400">
-            {project?.media.length || 0} file caricati
-          </p>
+    <main className="app-shell min-h-screen px-4 py-6 sm:px-6 lg:px-10">
+
+      <div className="mx-auto max-w-7xl">
+
+        {/* TOP BAR */}
+
+        <header className="surface sticky top-4 z-40 mb-6 flex items-center justify-between rounded-2xl px-4 py-3">
+
+          <div className="flex items-center gap-3">
+
+            <button
+              onClick={() =>
+                router.push("/")
+              }
+              className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-slate-300 transition hover:bg-white/10"
+            >
+              ←
+            </button>
+
+            <div>
+
+              <p className="text-sm font-semibold text-white">
+                AI Video Maker
+              </p>
+
+              <p className="text-[11px] text-slate-500">
+                Editing workspace
+              </p>
+
+            </div>
+
+          </div>
+
+          <div className="flex items-center gap-2">
+
+            <span className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-400 sm:block">
+              {project?.media.length || 0} asset
+            </span>
+
+            <span className="rounded-full border border-emerald-400/15 bg-emerald-400/10 px-3 py-1.5 text-xs font-medium text-emerald-300">
+              ● Progetto attivo
+            </span>
+
+          </div>
+
+        </header>
+
+        {/* PROJECT HERO */}
+
+        <section className="surface float-in rounded-3xl p-5 sm:p-7">
+
+          <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
+
+            <div>
+
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                Project workspace
+              </p>
+
+              <h1 className="mt-2 text-3xl font-black tracking-tight sm:text-4xl">
+
+                Progetto{" "}
+
+                <span className="gradient-text">
+                  {project?.project_id?.slice(
+                    0,
+                    8
+                  )}
+                </span>
+
+              </h1>
+
+              <p className="mt-2 text-sm text-slate-500">
+                Costruisci il video passo dopo
+                passo: importa, monta,
+                sincronizza e renderizza.
+              </p>
+
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 sm:min-w-[360px]">
+
+              {[
+                ["01", "Import"],
+                ["02", "Edit"],
+                ["03", "Export"],
+              ].map(
+                ([n, label]) => (
+                  <div
+                    key={n}
+                    className="surface-soft rounded-2xl px-3 py-3"
+                  >
+                    <p className="text-[10px] font-bold text-violet-300">
+                      {n}
+                    </p>
+
+                    <p className="mt-1 text-xs font-semibold text-white">
+                      {label}
+                    </p>
+                  </div>
+                )
+              )}
+
+            </div>
+
+          </div>
+
+        </section>
+
+        {/* WORKSPACE */}
+
+        <div className="mt-6 grid gap-6">
+
+          {progress && (
+            <section className="surface rounded-3xl p-5">
+              <PipelineProgress
+                log={
+                  progress.pipeline_log
+                }
+              />
+            </section>
+          )}
+
+          {project && (
+            <section className="surface rounded-3xl p-5">
+              <DriveSection
+                projectId={projectId}
+                onSubmitImport={
+                  handleSubmitDriveImport
+                }
+                job={lastJob(
+                  "drive_import"
+                )}
+              />
+            </section>
+          )}
+
+          {project && (
+            <section className="surface rounded-3xl p-5">
+              <ExportSection
+                project={project}
+                onSubmit={
+                  handleSubmitRender
+                }
+                job={lastJob(
+                  "render"
+                )}
+              />
+            </section>
+          )}
+
+          {project && (
+            <section className="surface rounded-3xl p-5">
+              <MontageSection
+                project={project}
+                onGenerate={
+                  handleGenerateEdit
+                }
+                onPatchClip={
+                  handlePatchClip
+                }
+                onResetClip={
+                  handleResetClip
+                }
+                busy={editBusy}
+              />
+            </section>
+          )}
+
+          {project && (
+            <section className="surface rounded-3xl p-5">
+              <AudioSection
+                audio={
+                  project.audio
+                }
+                onUpload={
+                  handleAudioUpload
+                }
+                busy={audioBusy}
+              />
+            </section>
+          )}
+
+          {project && (
+            <section className="surface rounded-3xl p-5">
+              <ProjectSettings
+                spec={
+                  project.output_spec
+                }
+                onSave={
+                  handleSettings
+                }
+                busy={
+                  settingsBusy
+                }
+                media={
+                  project.media
+                }
+              />
+            </section>
+          )}
+
+          {/* UPLOAD */}
+
+          <section className="surface rounded-3xl p-5 sm:p-6">
+
+            <div className="mb-4 flex items-end justify-between gap-4">
+
+              <div>
+
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                  Media library
+                </p>
+
+                <h2 className="mt-1 text-xl font-bold text-white">
+                  Aggiungi contenuti
+                </h2>
+
+              </div>
+
+              <span className="text-xs text-slate-500">
+                Foto e video · max 500 MB
+              </span>
+
+            </div>
+
+            <UploadZone
+              projectId={projectId}
+              onUploadComplete={
+                handleUploadComplete
+              }
+            />
+
+          </section>
+
+          {/* TIMELINE */}
+
+          {project && (
+            <section className="surface rounded-3xl p-5 sm:p-6">
+
+              <Timeline
+                projectId={
+                  projectId
+                }
+                media={
+                  project.media
+                }
+                onReorder={
+                  handleReorder
+                }
+                onToggleFill={
+                  handleToggleFill
+                }
+                busy={
+                  timelineBusy
+                }
+              />
+
+            </section>
+          )}
+
+          {error && (
+            <div className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">
+              {error}
+            </div>
+          )}
+
+          {project && (
+            <section className="surface rounded-3xl p-5">
+
+              <ErrorPanel
+                errors={
+                  project.errors
+                }
+                onClear={
+                  handleClearErrors
+                }
+                busy={
+                  clearBusy
+                }
+              />
+
+            </section>
+          )}
+
         </div>
-        <span className="text-xs px-2 py-1 rounded bg-emerald-900/40 border border-emerald-800 text-emerald-300">
-          ✓ Pronto
-        </span>
+
+        <footer className="py-10 text-center text-xs text-slate-600">
+          {project?.project_id} · AI Video Maker
+        </footer>
+
       </div>
-
-      {progress && <PipelineProgress log={progress.pipeline_log} />}
-
-      {project && (
-        <DriveSection
-          projectId={projectId}
-          onSubmitImport={handleSubmitDriveImport}
-          job={lastJob("drive_import")}
-        />
-      )}
-
-      {project && (
-        <ExportSection project={project} onSubmit={handleSubmitRender} job={lastJob("render")} />
-      )}
-
-      {project && (
-        <MontageSection
-          project={project}
-          onGenerate={handleGenerateEdit}
-          onPatchClip={handlePatchClip}
-          onResetClip={handleResetClip}
-          busy={editBusy}
-        />
-      )}
-
-      {project && (
-        <AudioSection audio={project.audio} onUpload={handleAudioUpload} busy={audioBusy} />
-      )}
-
-      {project && (
-        <ProjectSettings
-          spec={project.output_spec}
-          onSave={handleSettings}
-          busy={settingsBusy}
-          media={project.media}
-        />
-      )}
-
-      <UploadZone projectId={projectId} onUploadComplete={handleUploadComplete} />
-
-      {project && (
-        <Timeline
-          projectId={projectId}
-          media={project.media}
-          onReorder={handleReorder}
-          onToggleFill={handleToggleFill}
-          busy={timelineBusy}
-        />
-      )}
-
-      {error && (
-        <p className="rounded-lg border border-rose-800 bg-rose-900/30 px-3 py-2 text-sm text-rose-200">
-          {error}
-        </p>
-      )}
-
-      {project && (
-        <ErrorPanel errors={project.errors} onClear={handleClearErrors} busy={clearBusy} />
-      )}
     </main>
   );
 }

@@ -5,8 +5,9 @@ import type { BackgroundFill, MediaItem } from "@/lib/api";
 export interface OutputSpec {
   resolution: string;
   fps: number;
-  background_fill: BackgroundFill;
-  vcodec: "h264" | "h265";
+  transition_duration?: number;
+  background_fill?: "cover" | "contain";
+  vcodec?: "h264" | "h265";
 }
 
 interface ProjectSettingsProps {
