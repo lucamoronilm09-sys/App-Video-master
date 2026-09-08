@@ -496,7 +496,8 @@ export async function driveDisconnect(): Promise<void> {
 
 export async function driveListFiles(
   projectId: string,
-  folderId?: string
+  folderId?: string,
+  pageToken?: string
 ): Promise<{ current: { id: string; name: string }; entries: DriveEntry[]; nextPageToken?: string }> {
   const url = new URL(`${API_BASE}/projects/${projectId}/drive/files`);
   if (folderId) url.searchParams.set("folder_id", folderId);
