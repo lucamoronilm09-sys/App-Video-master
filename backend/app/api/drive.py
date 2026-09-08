@@ -99,7 +99,7 @@ def drive_status() -> dict:
 @router.get("/drive/auth-url")
 def drive_auth_url(request: Request) -> dict:
     try:
-        host = _resolve_drive_host(request)
+        host = os.getenv("DRIVE_HOST", "").strip().rstrip("/") or DEFAULT_DRIVE_HOST
         return {"url": dc.get_authorization_url(host)}
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
