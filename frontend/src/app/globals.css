@@ -1,8 +1,11 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #07080d;
+  --foreground: #f7f8fb;
+  --muted: #8d96a8;
+  --accent: #8b5cf6;
+  --accent-2: #ec4899;
 }
 
 @theme inline {
@@ -12,15 +15,135 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--background);
 }
 
 body {
-  background: var(--background);
+  min-height: 100vh;
+  margin: 0;
   color: var(--foreground);
+  background:
+    radial-gradient(circle at 10% 0%, rgba(139, 92, 246, 0.18), transparent 28%),
+    radial-gradient(circle at 90% 12%, rgba(236, 72, 153, 0.12), transparent 24%),
+    linear-gradient(180deg, #080912 0%, #07080d 55%, #05060a 100%);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(139, 92, 246, 0.35);
+}
+
+.surface {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: linear-gradient(
+    180deg,
+    rgba(20, 24, 35, 0.88),
+    rgba(12, 15, 24, 0.84)
+  );
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(18px);
+}
+
+.surface-soft {
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(15, 18, 28, 0.62);
+}
+
+.gradient-text {
+  background: linear-gradient(
+    90deg,
+    #ffffff 0%,
+    #d8ccff 48%,
+    #f9a8d4 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.glow {
+  box-shadow:
+    0 0 0 1px rgba(139, 92, 246, 0.15),
+    0 12px 40px rgba(139, 92, 246, 0.16);
+}
+
+.app-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+.app-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+
+  background-image:
+    linear-gradient(
+      rgba(255, 255, 255, 0.018) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.018) 1px,
+      transparent 1px
+    );
+
+  background-size: 32px 32px;
+
+  mask-image: linear-gradient(
+    to bottom,
+    black,
+    transparent 85%
+  );
+
+  opacity: 0.32;
+  z-index: -1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .float-in {
+    animation: float-in 0.55s ease-out both;
+  }
+
+  .pulse-dot {
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+}
+
+@keyframes float-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.95);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
 }
