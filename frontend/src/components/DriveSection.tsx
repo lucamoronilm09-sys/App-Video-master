@@ -89,8 +89,10 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
    *  heartbeat, l'import non deve sembrare "in corso" all'infinito. */
   const stuckWarning: string | null = (() => {
     if (!job || !isJobActive(job)) return null;
-    const elapsed = nowSec - (new Date(job.created_at).getTime() / 1000);
-    const staleFor = nowSec - (new Date(job.updated_at).getTime() / 1000);
+    const createdMs = typeof job.created_at === "number" ? job.created_at * 1000 : new Date(job.created_at).getTime();
+    const updatedMs = typeof job.updated_at === "number" ? job.updated_at * 1000 : new Date(job.updated_at).getTime();
+    const elapsed = nowSec - (createdMs / 1000);
+    const staleFor = nowSec - (updatedMs / 1000);
     if (staleFor > STALE_AFTER_SEC) {
       const mins = Math.max(1, Math.round(staleFor / 60));
       return `Nessun avanzamento da oltre ${mins} min: la connessione con il server potrebbe essersi interrotta. Ricarica la pagina: se i file non compaiono, riprova l'import.`;
@@ -109,6 +111,16 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
       setError(formatDriveError(err, "Impossibile leggere lo stato Drive"));
     }
   }, []);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === "drive-connected") {
+        void refreshStatus();
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [refreshStatus]);
 
   useEffect(() => {
     refreshStatus();
