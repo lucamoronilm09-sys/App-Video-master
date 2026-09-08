@@ -78,47 +78,29 @@ export function UploadZone({ projectId, onUploadComplete, disabled }: UploadZone
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<{ title: string; detail: string; hint?: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const progressRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (progressRef.current) clearInterval(progressRef.current);
-    };
-  }, []);
 
   const uploadFiles = useCallback(async (files: File[]) => {
+    const MAX_SELECTION = 500;
+    const BATCH_SIZE = 20;
+    if (files.length > MAX_SELECTION) {
+      setError({ title: "Troppi file", detail: `Puoi selezionare fino a ${MAX_SELECTION} foto/video per volta.`, hint: "La selezione viene poi inviata automaticamente in piccoli lotti." });
+      return;
+    }
     setUploading(true);
     setProgress(0);
     setError(null);
-
-    if (progressRef.current) clearInterval(progressRef.current);
-    progressRef.current = setInterval(() => {
-      setProgress(p => {
-        if (p >= 90) return 90;
-        const step = p < 30 ? 4 : p < 60 ? 2 : 1;
-        return Math.min(90, p + step);
-      });
-    }, 200);
-
     try {
-      const data = await uploadMedia(projectId, files);
-      if (progressRef.current) {
-        clearInterval(progressRef.current);
-        progressRef.current = null;
+      const batches = Math.ceil(files.length / BATCH_SIZE);
+      for (let i = 0; i < batches; i++) {
+        const batch = files.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
+        await uploadMedia(projectId, batch);
+        setProgress(Math.round(((i + 1) / batches) * 100));
+        await onUploadComplete(batch.length);
       }
-      setProgress(100);
-      onUploadComplete(data.media.length);
     } catch (err) {
-      if (progressRef.current) {
-        clearInterval(progressRef.current);
-        progressRef.current = null;
-      }
       setError(formatError(err));
     } finally {
-      setTimeout(() => {
-        setUploading(false);
-        setProgress(0);
-      }, 600);
+      setTimeout(() => { setUploading(false); setProgress(0); }, 700);
     }
   }, [projectId, onUploadComplete]);
 
@@ -132,9 +114,10 @@ export function UploadZone({ projectId, onUploadComplete, disabled }: UploadZone
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    if (disabled) return;
-    const files = Array.from(e.dataTransfer.files);
-    if (files.length) await uploadFiles(files);
+    if (!disabled) {
+      const files = Array.from(e.dataTransfer.files);
+      if (files.length) await uploadFiles(files);
+    }
   }, [disabled, uploadFiles]);
 
   const handleFileSelect = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
@@ -143,15 +126,13 @@ export function UploadZone({ projectId, onUploadComplete, disabled }: UploadZone
     e.target.value = "";
   }, [uploadFiles]);
 
-  const accepted = "image/*,video/*";
-
   return (
     <div className="relative">
       <input
         ref={inputRef}
         type="file"
         multiple
-        accept={accepted}
+        accept="image/*,video/*"
         onChange={handleFileSelect}
         className="hidden"
         disabled={disabled || uploading}
@@ -163,68 +144,34 @@ export function UploadZone({ projectId, onUploadComplete, disabled }: UploadZone
         onDragOver={handleDrag}
         onDrop={handleDrop}
         onClick={() => !disabled && !uploading && inputRef.current?.click()}
-        className={`
-          border-2 border-dashed rounded-xl p-8 text-center transition-colors
-          ${dragActive ? "border-emerald-400 bg-emerald-900/20" : "border-slate-700 hover:border-slate-500"}
-          ${disabled || uploading ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}
-        `}
+        className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${dragActive ? "border-emerald-400 bg-emerald-900/20" : "border-slate-700 hover:border-slate-500"} ${disabled || uploading ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
         role="button"
         tabIndex={0}
-        onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inputRef.current?.click(); }}}
+        onKeyDown={e => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            inputRef.current?.click();
+          }
+        }}
       >
         {uploading ? (
           <div className="space-y-3">
             <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-emerald-400 transition-all duration-300"
-                style={{ width: `${progress}%` }}
-              />
+              <div className="h-full bg-emerald-400 transition-all duration-300" style={{ width: `${progress}%` }} />
             </div>
-            <p className="text-sm text-slate-400">
-              {progress >= 90 ? "Elaborazione sul server…" : "Caricamento in corso…"} {progress >= 100 ? "100%" : `${progress}%`}
-            </p>
+            <p className="text-sm text-slate-400">Caricamento a lotti… ${progress}%</p>
           </div>
         ) : error ? (
           <div className="text-left">
-            <div className="mb-2 flex items-center justify-between">
-              <div>
-                <p className="font-medium text-rose-400">{error.title}</p>
-                <p className="text-sm text-rose-200">{error.detail}</p>
-              </div>
-              <button
-                onClick={() => setError(null)}
-                className="text-xs underline text-rose-300 hover:text-rose-200"
-              >
-                Riprova
-              </button>
-            </div>
-            {error.hint && (
-              <p className="text-xs text-slate-400 mt-2 p-2 rounded bg-slate-800/50 border border-slate-700">
-                💡 {error.hint}
-              </p>
-            )}
+            <p className="font-medium text-rose-400">{error.title}</p>
+            <p className="text-sm text-rose-200">{error.detail}</p>
+            {error.hint && <p className="text-xs text-slate-400 mt-2 p-2 rounded bg-slate-800/50 border border-slate-700">{error.hint}</p>}
+            <button onClick={(e) => { e.stopPropagation(); setError(null); }} className="text-xs underline text-rose-300 mt-2">Chiudi</button>
           </div>
         ) : (
           <div className="space-y-2">
-            <svg
-              className="mx-auto h-12 w-12 text-slate-500"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.5}
-                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-              />
-            </svg>
-            <p className="text-slate-300">
-              Trascina foto/video qui, o clicca per selezionare
-            </p>
-            <p className="text-xs text-slate-500">
-              Formati: JPG, PNG, WebP, HEIC, MP4, MOV, MKV, WebM&hellip; (max 500MB cadauno)
-            </p>
+            <p className="text-slate-300">Trascina foto/video qui, o clicca per selezionare</p>
+            <p className="text-xs text-slate-500">Fino a 500 foto/video per selezione · invio automatico a lotti da 20 · max 500MB ciascuno</p>
           </div>
         )}
       </div>
