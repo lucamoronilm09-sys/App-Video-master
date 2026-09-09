@@ -178,7 +178,7 @@ const DIRECT_API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:800
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minuti per upload grandi
+  const timeoutId = setTimeout(() => controller.abort(), 120000);
 
   try {
     const res = await fetch(url, {
@@ -222,122 +222,77 @@ export async function listProjects(): Promise<ProjectSummary[]> {
 }
 
 export async function deleteProject(projectId: string): Promise<void> {
-  await fetch(`${API_BASE}/projects/${projectId}`, {
-    method: "DELETE",
-  });
+  await fetch(`${API_BASE}/projects/${projectId}`, { method: "DELETE" });
 }
 
 export async function getProject(projectId: string): Promise<ProjectState> {
   return fetchJson<ProjectState>(`${API_BASE}/projects/${projectId}`);
 }
 
-export async function uploadMedia(
-  projectId: string,
-  files: File[]
-): Promise<ProjectState> {
+export async function uploadMedia(projectId: string, files: File[]): Promise<ProjectState> {
   const formData = new FormData();
   files.forEach((f) => formData.append("files", f));
-
-  // NON impostare Content-Type manualmente: il browser lo gestisce con boundary corretto
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minuti per upload multipli/grandi
+  const timeoutId = setTimeout(() => controller.abort(), 300000);
 
   try {
     const res = await fetch(`${DIRECT_API_BASE}/api/projects/${projectId}/media`, {
       method: "POST",
       signal: controller.signal,
       body: formData,
-      // Importante: NON aggiungere headers Content-Type per FormData
-      // Il browser imposta automaticamente "multipart/form-data; boundary=..."
     });
-
     clearTimeout(timeoutId);
 
     if (!res.ok) {
       const errText = await res.text();
-      
-      // Gestione errori specifici HTTP
-      if (res.status === 413) {
-        throw new Error("File troppo grande: il limite è 500MB per file");
-      }
-      if (res.status === 400) {
-        throw new Error(`Formato non supportato: ${errText || "contenuto non valido"}`);
-      }
-      if (res.status === 404) {
-        throw new Error("Progetto non trovato");
-      }
-      if (res.status === 500) {
-        throw new Error(`Errore interno del server: ${errText}`);
-      }
-      
+      if (res.status === 413) throw new Error("File troppo grande: il limite è 500MB per file");
+      if (res.status === 400) throw new Error(`Formato non supportato: ${errText || "contenuto non valido"}`);
+      if (res.status === 404) throw new Error("Progetto non trovato");
+      if (res.status === 500) throw new Error(`Errore interno del server: ${errText}`);
       throw new Error(errText || `HTTP ${res.status}`);
     }
 
     const data = await res.json();
-    
-    // Validazione response: deve essere un ProjectState valido
     if (!data || typeof data !== "object" || !data.project_id || !Array.isArray(data.media)) {
       throw new Error("Response dal server non valida");
     }
-    
     return data;
   } catch (err) {
     clearTimeout(timeoutId);
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("Upload scaduto: il file è molto grande o la connessione è lenta. Riprova con meno file per volta.");
     }
-    // Rilancia gli errori già formattati
-    if (err instanceof Error) {
-      throw err;
-    }
+    if (err instanceof Error) throw err;
     throw new Error("Errore sconosciuto durante l'upload");
   }
 }
 
-export async function reorderMedia(
-  projectId: string,
-  mediaIds: string[]
-): Promise<ProjectState> {
+export async function reorderMedia(projectId: string, mediaIds: string[]): Promise<ProjectState> {
   return fetchJson<ProjectState>(`${API_BASE}/projects/${projectId}/media/order`, {
     method: "PUT",
     body: JSON.stringify({ media_ids: mediaIds }),
   });
 }
 
-export async function updateMediaFill(
-  projectId: string,
-  mediaId: string,
-  fill: BackgroundFill
-): Promise<ProjectState> {
-  return fetchJson<ProjectState>(
-    `${API_BASE}/projects/${projectId}/media/${mediaId}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify({ background_fill: fill }),
-    }
-  );
+export async function updateMediaFill(projectId: string, mediaId: string, fill: BackgroundFill): Promise<ProjectState> {
+  return fetchJson<ProjectState>(`${API_BASE}/projects/${projectId}/media/${mediaId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ background_fill: fill }),
+  });
 }
 
-export async function updateSettings(
-  projectId: string,
-  patch: SettingsPatch
-): Promise<ProjectState> {
+export async function updateSettings(projectId: string, patch: SettingsPatch): Promise<ProjectState> {
   return fetchJson<ProjectState>(`${API_BASE}/projects/${projectId}/settings`, {
     method: "PATCH",
     body: JSON.stringify(patch),
   });
 }
 
-export async function uploadAudio(
-  projectId: string,
-  file: File
-): Promise<ProjectState> {
+export async function uploadAudio(projectId: string, file: File): Promise<ProjectState> {
   const formData = new FormData();
   formData.append("file", file);
-
-  // NON impostare Content-Type manualmente per FormData
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minuti
+  const timeoutId = setTimeout(() => controller.abort(), 300000);
 
   try {
     const res = await fetch(`${DIRECT_API_BASE}/api/projects/${projectId}/audio`, {
@@ -345,74 +300,32 @@ export async function uploadAudio(
       signal: controller.signal,
       body: formData,
     });
-
     clearTimeout(timeoutId);
-
-    if (!res.ok) {
-      const errText = await res.text();
-      
-      if (res.status === 413) {
-        throw new Error("File audio troppo grande: il limite è 500MB");
-      }
-      if (res.status === 400) {
-        throw new Error(`Formato audio non supportato: ${errText || "contenuto non valido"}`);
-      }
-      if (res.status === 404) {
-        throw new Error("Progetto non trovato");
-      }
-      
-      throw new Error(errText || `HTTP ${res.status}`);
-    }
-
+    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
     const data = await res.json();
-    
-    if (!data || typeof data !== "object" || !data.project_id) {
-      throw new Error("Response dal server non valida");
-    }
-    
+    if (!data || typeof data !== "object" || !data.project_id) throw new Error("Response dal server non valida");
     return data;
   } catch (err) {
     clearTimeout(timeoutId);
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new Error("Upload audio scaduto: riprova con un file più piccolo");
-    }
-    if (err instanceof Error) {
-      throw err;
-    }
+    if (err instanceof Error && err.name === "AbortError") throw new Error("Upload audio scaduto: riprova con un file più piccolo");
+    if (err instanceof Error) throw err;
     throw new Error("Errore sconosciuto durante l'upload audio");
   }
 }
 
 export async function planEdit(projectId: string): Promise<ProjectState> {
-  return fetchJson<ProjectState>(`${API_BASE}/projects/${projectId}/edit`, {
-    method: "POST",
+  return fetchJson<ProjectState>(`${API_BASE}/projects/${projectId}/edit`, { method: "POST" });
+}
+
+export async function patchClipOverride(projectId: string, mediaId: string, patch: ClipOverride): Promise<ProjectState> {
+  return fetchJson<ProjectState>(`${API_BASE}/projects/${projectId}/edit/clips/${mediaId}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
   });
 }
 
-export async function patchClipOverride(
-  projectId: string,
-  mediaId: string,
-  patch: ClipOverride
-): Promise<ProjectState> {
-  return fetchJson<ProjectState>(
-    `${API_BASE}/projects/${projectId}/edit/clips/${mediaId}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify(patch),
-    }
-  );
-}
-
-export async function resetClipOverride(
-  projectId: string,
-  mediaId: string
-): Promise<ProjectState> {
-  return fetchJson<ProjectState>(
-    `${API_BASE}/projects/${projectId}/edit/clips/${mediaId}`,
-    {
-      method: "DELETE",
-    }
-  );
+export async function resetClipOverride(projectId: string, mediaId: string): Promise<ProjectState> {
+  return fetchJson<ProjectState>(`${API_BASE}/projects/${projectId}/edit/clips/${mediaId}`, { method: "DELETE" });
 }
 
 export async function submitRenderJob(projectId: string): Promise<ProjectState | { job: Job }> {
@@ -421,35 +334,19 @@ export async function submitRenderJob(projectId: string): Promise<ProjectState |
   return res.json();
 }
 
-export async function submitDriveImportJob(
-  projectId: string,
-  fileIds: string[],
-  folderIds: string[],
-  background: boolean = true
-): Promise<ProjectState | { job: Job }> {
+export async function submitDriveImportJob(projectId: string, fileIds: string[], folderIds: string[], background = true): Promise<ProjectState | { job: Job }> {
   const url = `${API_BASE}/projects/${projectId}/drive/import${background ? "?background=true" : ""}`;
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ file_ids: fileIds, folder_ids: folderIds }),
   });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(err || `HTTP ${res.status}`);
-  }
-
-  // Se background=true, il backend ritorna 202 con {job: ...}
-  // Altrimenti ritorna ProjectState completo
+  if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
   return res.json();
 }
 
 export async function clearErrors(projectId: string): Promise<ProjectState> {
-  return fetchJson<ProjectState>(`${API_BASE}/projects/${projectId}/errors/clear`, {
-    method: "POST",
-  });
+  return fetchJson<ProjectState>(`${API_BASE}/projects/${projectId}/errors/clear`, { method: "POST" });
 }
 
 export function getEventSourceUrl(projectId: string): string {
@@ -475,13 +372,12 @@ export async function driveAuthUrl(): Promise<string> {
 }
 
 export async function saveDriveCredentials(clientId: string, clientSecret: string): Promise<void> {
-  await fetch(`${API_BASE}/drive/credentials`, {
+  const res = await fetch(`${API_BASE}/drive/credentials`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
   });
+  if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
 }
 
 export async function driveStatus(): Promise<DriveStatus> {
@@ -489,30 +385,27 @@ export async function driveStatus(): Promise<DriveStatus> {
 }
 
 export async function driveDisconnect(): Promise<void> {
-  await fetch(`${API_BASE}/drive/disconnect`, {
-    method: "POST",
-  });
+  const res = await fetch(`${API_BASE}/drive/disconnect`, { method: "POST" });
+  if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
 }
 
 export async function driveListFiles(
   projectId: string,
   folderId?: string,
   pageToken?: string,
-  shared: boolean = false
+  shared = false
 ): Promise<{ current: { id: string; name: string }; entries: DriveEntry[]; nextPageToken?: string }> {
   const params = new URLSearchParams();
   if (folderId) params.set("folder_id", folderId);
   if (pageToken) params.set("page_token", pageToken);
   if (shared) params.set("shared", "true");
   const qs = params.toString();
-  return fetchJson<{ current: { id: string; name: string }; entries: DriveEntry[]; nextPageToken?: string }>(
-    \`${API_BASE}/projects/\${projectId}/drive/files\${qs ? \`?\${qs}\` : ""}\`
-  );
+  const url = `${API_BASE}/projects/${projectId}/drive/files${qs ? `?${qs}` : ""}`;
+  return fetchJson(url);
 }
 
 export function isJobActive(job?: Job | null): boolean {
-  if (!job) return false;
-  return job.status === "pending" || job.status === "running";
+  return !!job && (job.status === "pending" || job.status === "running");
 }
 
 export function mediaThumbUrl(projectId: string, mediaId: string): string {
