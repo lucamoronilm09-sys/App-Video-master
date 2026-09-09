@@ -34,7 +34,7 @@ export function AudioSection({ audio, tracks = [], onUpload, busy }: AudioSectio
       <div className="mb-3 flex items-baseline justify-between">
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">Audio</h3>
-          <p className="mt-1 text-xs text-slate-500">Puoi aggiungere più brani: vengono riprodotti uno dopo l'altro e la playlist si ripete se il video è più lungo.</p>
+          <p className="mt-1 text-xs text-slate-500">Puoi aggiungere più brani: vengono riprodotti uno dopo l&apos;altro e la playlist si ripete se il video è più lungo.</p>
         </div>
         <button type="button" disabled={busy} onClick={() => inputRef.current?.click()}
           className="text-xs text-emerald-400 hover:underline disabled:opacity-50">
