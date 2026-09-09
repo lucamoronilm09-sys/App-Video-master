@@ -39,6 +39,8 @@ export interface MediaItem {
 }
 
 export interface AudioTrack {
+  id?: string;
+  name?: string;
   path?: string;
   duration_sec: number;
   bpm: number;
@@ -139,6 +141,7 @@ export interface ProjectState {
   project_id: string;
   media: MediaItem[];
   audio: AudioTrack;
+  audio_tracks?: AudioTrack[];
   style_profile: string;
   output_spec: OutputSpec;
   edit_decision_list: EditEntry[];
