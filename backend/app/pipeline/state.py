@@ -32,6 +32,7 @@ def new_project_state() -> dict:
         "schema_version": SCHEMA_VERSION,
         "project_id": pid,
         "media": [],
+        "audio_tracks": [],
         "audio": {
             "path": None,
             "duration_sec": 0.0,
