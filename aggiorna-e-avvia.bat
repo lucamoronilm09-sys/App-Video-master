@@ -6,59 +6,92 @@ title AI Video Maker - Aggiorna e avvia
 echo.
 echo ================================================================
 echo        AI VIDEO MAKER - AGGIORNA E AVVIA
- echo ================================================================
+echo ================================================================
 echo.
 
 rem ================================================================
-rem 1. PREREQUISITI - installa solo cio' che manca.
+rem 1. PREREQUISITI - usa winget solo se disponibile.
+rem    Se winget non c'e', non bloccare l'avvio se i prerequisiti
+rem    sono gia' installati. Se manca qualcosa, mostra cosa manca.
 rem ================================================================
 echo [1/5] Controllo prerequisiti...
 where powershell.exe >nul 2>&1 || goto FAIL
-where winget.exe >nul 2>&1 || (
-  echo ERRORE: winget non e' disponibile. Installa/Aggiorna App Installer.
-  goto FAIL
+
+set "HAS_WINGET=0"
+where winget.exe >nul 2>&1 && set "HAS_WINGET=1"
+if "!HAS_WINGET!"=="1" (
+  echo winget disponibile: installazione automatica abilitata.
+) else (
+  echo winget non disponibile: continuo usando i programmi gia' installati.
 )
+
+set "MISSING="
 
 where git.exe >nul 2>&1 || (
-  echo Git non trovato: installazione automatica...
-  winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements || goto DEP_FAIL
-  call :refresh_path
+  if "!HAS_WINGET!"=="1" (
+    echo Git non trovato: installazione automatica...
+    winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements || goto DEP_FAIL
+    call :refresh_path
+  ) else set "MISSING=!MISSING! Git"
 )
-where git.exe >nul 2>&1 || goto FAIL
+where git.exe >nul 2>&1 || if "!HAS_WINGET!"=="0" set "MISSING=!MISSING! Git"
 
 python --version >nul 2>&1 || (
-  echo Python non trovato: installazione automatica Python 3.12...
-  winget install --id Python.Python.3.12 -e --accept-source-agreements --accept-package-agreements || goto DEP_FAIL
-  call :refresh_path
+  if "!HAS_WINGET!"=="1" (
+    echo Python non trovato: installazione automatica Python 3.12...
+    winget install --id Python.Python.3.12 -e --accept-source-agreements --accept-package-agreements || goto DEP_FAIL
+    call :refresh_path
+  ) else set "MISSING=!MISSING! Python"
 )
 python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" >nul 2>&1 || (
-  echo Python troppo vecchio: aggiornamento...
-  winget upgrade --id Python.Python.3.12 -e --accept-source-agreements --accept-package-agreements || goto DEP_FAIL
-  call :refresh_path
+  if "!HAS_WINGET!"=="1" (
+    echo Python troppo vecchio: aggiornamento...
+    winget upgrade --id Python.Python.3.12 -e --accept-source-agreements --accept-package-agreements || goto DEP_FAIL
+    call :refresh_path
+  ) else set "MISSING=!MISSING! Python>=3.11"
 )
-python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" >nul 2>&1 || goto FAIL
+python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" >nul 2>&1 || set "MISSING=!MISSING! Python>=3.11"
 
 node --version >nul 2>&1 || (
-  echo Node.js non trovato: installazione automatica...
-  winget install --id OpenJS.NodeJS.LTS -e --accept-source-agreements --accept-package-agreements || goto DEP_FAIL
-  call :refresh_path
+  if "!HAS_WINGET!"=="1" (
+    echo Node.js non trovato: installazione automatica...
+    winget install --id OpenJS.NodeJS.LTS -e --accept-source-agreements --accept-package-agreements || goto DEP_FAIL
+    call :refresh_path
+  ) else set "MISSING=!MISSING! Node.js"
 )
 node -e "process.exit(parseInt(process.versions.node.split('.')[0]) >= 22 ? 0 : 1)" >nul 2>&1 || (
-  echo Node.js troppo vecchio: aggiornamento...
-  winget upgrade --id OpenJS.NodeJS.LTS -e --accept-source-agreements --accept-package-agreements || goto DEP_FAIL
-  call :refresh_path
+  if "!HAS_WINGET!"=="1" (
+    echo Node.js troppo vecchio: aggiornamento...
+    winget upgrade --id OpenJS.NodeJS.LTS -e --accept-source-agreements --accept-package-agreements || goto DEP_FAIL
+    call :refresh_path
+  ) else set "MISSING=!MISSING! Node.js>=22"
 )
-node -e "process.exit(parseInt(process.versions.node.split('.')[0]) >= 22 ? 0 : 1)" >nul 2>&1 || goto FAIL
+node -e "process.exit(parseInt(process.versions.node.split('.')[0]) >= 22 ? 0 : 1)" >nul 2>&1 || set "MISSING=!MISSING! Node.js>=22"
 
 ffmpeg -version >nul 2>&1 || (
-  echo FFmpeg non trovato: installazione automatica...
-  winget install --id Gyan.FFmpeg.Shared -e --accept-source-agreements --accept-package-agreements || (
-    winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements || goto DEP_FAIL
-  )
-  call :refresh_path
+  if "!HAS_WINGET!"=="1" (
+    echo FFmpeg non trovato: installazione automatica...
+    winget install --id Gyan.FFmpeg.Shared -e --accept-source-agreements --accept-package-agreements || (
+      winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements || goto DEP_FAIL
+    )
+    call :refresh_path
+  ) else set "MISSING=!MISSING! FFmpeg"
 )
-ffmpeg -version >nul 2>&1 || goto FAIL
-ffprobe -version >nul 2>&1 || goto FAIL
+ffmpeg -version >nul 2>&1 || set "MISSING=!MISSING! FFmpeg"
+ffprobe -version >nul 2>&1 || set "MISSING=!MISSING! FFprobe"
+
+if defined MISSING (
+  echo.
+  echo ERRORE: mancano i seguenti prerequisiti:
+  echo !MISSING!
+  echo.
+  if "!HAS_WINGET!"=="0" (
+    echo winget non e' disponibile, quindi non posso installarli automaticamente.
+    echo Installa i prerequisiti mancanti e rilancia questo file.
+    echo In alternativa, installa/Aggiorna App Installer per abilitare winget.
+  )
+  goto DEP_FAIL
+)
 
 echo Prerequisiti OK.
 echo.
@@ -135,7 +168,7 @@ if "!PY_DEPS_NEEDED!"=="1" (
 echo.
 
 rem ================================================================
-rem 4. FRONTEND - npm install solo se package-lock/package.json cambia.
+rem 4. FRONTEND - npm install solo se necessario.
 rem ================================================================
 echo [4/5] Controllo dipendenze frontend...
 if not exist "frontend\package.json" goto FAIL
@@ -153,8 +186,6 @@ echo.
 
 rem ================================================================
 rem 5. BUILD - solo se necessario.
-rem    Il build viene fatto se: non esiste, e' arrivato codice nuovo,
-rem    oppure package.json/lock sono cambiati.
 rem ================================================================
 echo [5/5] Controllo build frontend...
 set "BUILD_NEEDED=0"
@@ -189,19 +220,24 @@ exit /b 0
 
 :DEP_FAIL
 echo.
-echo ERRORE: installazione/configurazione dipendenze fallita.
-goto FAIL
+echo ================================================================
+echo OPERAZIONE NON COMPLETATA
+ echo ================================================================
+echo L'avvio e' stato bloccato per evitare un'installazione incompleta.
+echo.
+pause
+exit /b 1
 
 :GIT_FAIL
 echo.
 echo ERRORE: sincronizzazione GitHub fallita.
-goto FAIL
+goto DEP_FAIL
 
 :FAIL
 echo.
 echo ================================================================
 echo OPERAZIONE NON COMPLETATA
- echo ================================================================
+echo ================================================================
 echo L'avvio e' stato bloccato per evitare un'installazione incompleta.
 echo.
 pause
