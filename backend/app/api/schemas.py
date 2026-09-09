@@ -43,11 +43,22 @@ class AudioBlock(BaseModel):
     energy_curve: list[float] = Field(default_factory=list)
 
 
+class AudioTrack(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    path: Optional[str] = None
+    duration_sec: float = 0.0
+    bpm: float = 0.0
+    beat_markers_sec: list[float] = Field(default_factory=list)
+    energy_curve: list[float] = Field(default_factory=list)
+
+
 class ProjectState(BaseModel):
     schema_version: int
     project_id: str
     media: list[MediaItem] = Field(default_factory=list)
     audio: AudioBlock = Field(default_factory=AudioBlock)
+    audio_tracks: list[AudioTrack] = Field(default_factory=list)
     style_profile: str = "album_memory"
     output_spec: OutputSpec = Field(default_factory=OutputSpec)
     edit_decision_list: list[dict[str, Any]] = Field(default_factory=list)
