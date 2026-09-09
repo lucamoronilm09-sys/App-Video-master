@@ -44,11 +44,10 @@ def test_render_job_background(isolated):
         r = client.post(f"/api/projects/{pid}/render", params={"background": "true"})
         assert r.status_code == 202, r.text
         job = r.json()["job"]
-        assert job["status"] in ("queued", "running")
-        # doppio submit mentre attivo -> 409
+        assert job["status"] in ("pending", "running")
         assert client.post(f"/api/projects/{pid}/render",
                            params={"background": "true"}).status_code == 409
-        final = _wait_job(client, job["job_id"])
+        final = _wait_job(client, job["id"])
         assert final["status"] == "done", final.get("error")
         assert final["progress"]["fraction"] == 1.0
         assert final["result"]["qa_status"] == "approved"
@@ -94,7 +93,7 @@ def test_drive_import_job_background(isolated, monkeypatch):
         r = client.post(f"/api/projects/{pid}/drive/import",
                         params={"background": "true"}, json={"file_ids": ["f1"]})
         assert r.status_code == 202, r.text
-        final = _wait_job(client, r.json()["job"]["job_id"])
+        final = _wait_job(client, r.json()["job"]["id"])
         assert final["status"] == "done", final.get("error")
         body = client.get(f"/api/projects/{pid}").json()
         assert len(body["media"]) == 1
@@ -107,8 +106,8 @@ def test_recover_and_submit_validation(isolated):
     j = jobs.submit("p1", "render")
     assert j["status"] == "queued"
     with pytest.raises(jobs.JobExistsError):
-        jobs.submit("p1", "render")  # stesso kind attivo
-    jobs.submit("p1", "drive_import")  # altro kind ok
+        jobs.submit("p1", "render")
+    jobs.submit("p1", "drive_import")
     stored = jobs.get(j["job_id"])
     stored["status"] = "running"
     jobs._write(stored)
