@@ -497,13 +497,17 @@ export async function driveDisconnect(): Promise<void> {
 export async function driveListFiles(
   projectId: string,
   folderId?: string,
-  pageToken?: string
+  pageToken?: string,
+  shared: boolean = false
 ): Promise<{ current: { id: string; name: string }; entries: DriveEntry[]; nextPageToken?: string }> {
   const params = new URLSearchParams();
   if (folderId) params.set("folder_id", folderId);
   if (pageToken) params.set("page_token", pageToken);
+  if (shared) params.set("shared", "true");
   const qs = params.toString();
-  return fetchJson<{ current: { id: string; name: string }; entries: DriveEntry[]; nextPageToken?: string }>(`${API_BASE}/projects/${projectId}/drive/files${qs ? `?${qs}` : ""}`);
+  return fetchJson<{ current: { id: string; name: string }; entries: DriveEntry[]; nextPageToken?: string }>(
+    \`${API_BASE}/projects/\${projectId}/drive/files\${qs ? \`?\${qs}\` : ""}\`
+  );
 }
 
 export function isJobActive(job?: Job | null): boolean {
