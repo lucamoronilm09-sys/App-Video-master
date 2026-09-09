@@ -841,4 +841,505 @@ def delete_project(project_id: str) -> dict:
     if project_path.exists():
         shutil.rmtree(project_path)
     
+    return {"message": "Progetto eliminato con successo", "project_id": project_id}@router.post("/projects/{project_id}/audio", response_model=ProjectState)
+async def upload_audio(project_id: str, file: UploadFile = File(...)) -> dict:
+    """Carica una nuova traccia audio e la aggiunge alla sequenza del progetto."""
+    state = _get_state_or_404(project_id)
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in ALLOWED_AUDIO_EXTS:
+        raise HTTPException(status_code=400, detail=f"Formato audio non supportato: {ext}")
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="File audio troppo grande: massimo 500MB")
+    if not _validate_audio_magic(content, ext):
+        raise HTTPException(status_code=400, detail="Contenuto audio non valido")
+
+    audio_dir = state_store.audio_dir(project_id)
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    dest = audio_dir / f"{uuid.uuid4().hex[:8]}{ext}"
+    dest.write_bytes(content)
+
+    track = {"id": uuid.uuid4().hex[:12], "name": file.filename or dest.name,
+             "path": str(dest), "duration_sec": 0.0, "bpm": 0.0,
+             "beat_markers_sec": [], "energy_curve": []}
+    temp_state = {"audio": track}
+    temp_state = await audio_analysis.run(temp_state)
+    track = temp_state["audio"]
+
+    tracks = list(state.get("audio_tracks") or [])
+    tracks.append(track)
+    state["audio_tracks"] = tracks
+
+    # Backward compatibility: audio è un riepilogo concatenato delle tracce.
+    total = 0.0
+    bpm_weight = 0.0
+    bpm_sum = 0.0
+    markers: list[float] = []
+    energy: list[float] = []
+    for t in tracks:
+        dur = float(t.get("duration_sec") or 0.0)
+        markers.extend(round(float(x) + total, 3) for x in (t.get("beat_markers_sec") or []))
+        energy.extend(t.get("energy_curve") or [])
+        bpm = float(t.get("bpm") or 0.0)
+        if bpm > 0 and dur > 0:
+            bpm_sum += bpm * dur
+            bpm_weight += dur
+        total += dur
+    state["audio"] = {
+        "path": tracks[0].get("path") if tracks else None,
+        "duration_sec": round(total, 3),
+        "bpm": round(bpm_sum / bpm_weight, 2) if bpm_weight else 0.0,
+        "beat_markers_sec": markers,
+        "energy_curve": energy,
+    }
+    state_store.save_state(state)
+    return state
+
+def _has_mp3_frame_sync(content: bytes, window: int = 8192) -> bool:
+    """True se c'è un frame header MP3/ADTS (0xFF + top-3-bit) in testa.
+
+    Copre tutte le versioni MPEG (1/2/2.5) e layer (I/II/III): il vecchio
+    controllo accettava solo 0xFF 0xFB, ma quasi tutti gli MP3 reali iniziano
+    con un tag ID3v2 o con sync diversi (0xF3/0xF2/0xF9...). La scansione
+    copre anche eventuali tag APE/Lyrics in testa.
+    """
+    head = content[:max(2, window)]
+    for i in range(len(head) - 1):
+        if head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0:
+            return True
+    return False
+
+
+def _validate_audio_magic(content: bytes, ext: str) -> bool:
+    """Valida magic bytes per file audio (un formato per estensione).
+
+    Ogni estensione supportata DEVE avere la sua firma qui: in passato
+    mancavano ID3 (quasi tutti gli MP3 reali), fLaC e l'header ASF dei WMA,
+    e l'upload di quei file veniva rifiutato con 400 pur essendo validi.
+    """
+    if not content or len(content) < 16:
+        return False
+
+    if ext == ".mp3":
+        return content.startswith(b"ID3") or _has_mp3_frame_sync(content, 2) \
+            or _has_mp3_frame_sync(content)
+
+    if ext == ".wav":
+        # RIFF....WAVE (o RF64 per i >4GB)
+        return content.startswith(b"RIFF") or content.startswith(b"RF64")
+
+    if ext in (".ogg", ".oga", ".opus"):
+        return content.startswith(b"OggS")
+
+    if ext == ".flac":
+        return content.startswith(b"fLaC")
+
+    if ext == ".m4a":
+        # box ftyp quasi sempre a offset 4
+        return b"ftyp" in content[:32]
+
+    if ext == ".aac":
+        # ADTS (frame sync) o ADIF
+        return content.startswith(b"ADIF") or _has_mp3_frame_sync(content, 2)
+
+    if ext == ".wma":
+        # header ASF GUID 30 26 B2 75 ...
+        return content.startswith(bytes([0x30, 0x26, 0xB2, 0x75]))
+
+    return False
+
+
+@router.post("/projects/{project_id}/edit", response_model=ProjectState)
+async def plan_edit(project_id: str) -> dict:
+    """M4: genera il piano di montaggio (Sequence -> Edit Director -> Compiler).
+
+    Tra Director e Compiler vengono riapplicate le modifiche manuali per-clip
+    (clip_overrides): "Rigenera" crea nuove idee ma non cancella i lucchetti
+    dell'utente (si tolgono col cestino sulla clip).
+    """
+    state = _get_state_or_404(project_id)
+    if not state.get("media"):
+        raise HTTPException(status_code=400, detail="Nessun media: carica prima foto/video")
+    state = await _run_stages(state, (("sequence", sequence.run),
+                                      ("edit_director", edit_director.run),
+                                      ("clip_overrides", clip_overrides.run),
+                                      ("timeline_compiler", timeline_compiler.run)))
+    state_store.save_state(state)
+    return state
+
+
+async def _run_stages(state: dict, stages) -> dict:
+    """Esegue stage via orchestratore; al primo errore salva e solleva 500
+    (stop downstream, AGENTS.md). Errori/log failed gia' registrati dal runner."""
+    try:
+        return await _orch_run_stages(state, list(stages))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        state_store.save_state(state)
+        raise HTTPException(status_code=500, detail=f"{exc}") from None
+
+
+def _get_edl_or_400(state: dict) -> list[dict]:
+    edl = state.get("edit_decision_list") or []
+    if not edl:
+        raise HTTPException(status_code=400,
+                            detail="Nessun montaggio: usa prima 'Genera montaggio'")
+    return edl
+
+
+@router.patch("/projects/{project_id}/edit/clips/{media_id}", response_model=ProjectState)
+async def update_clip(project_id: str, media_id: str, body: ClipOverrideRequest) -> dict:
+    """Modifica manuale di una clip (durata / dissolvenza in uscita / movimento).
+
+    Salva l'override in state["clip_overrides"] e riesegue solo
+    clip_overrides + compiler (veloce, il regista non viene toccato).
+    Invalida il QA precedente: serve riesportare per vedere il risultato.
+    """
+    from app.agents import edit_director as director_mod
+
+    state = _get_state_or_404(project_id)
+    edl = _get_edl_or_400(state)
+    target = next((m for m in state.get("media", []) if m.get("id") == media_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Media non trovato nel progetto")
+    if not any(e.get("media_id") == media_id for e in edl):
+        raise HTTPException(status_code=404, detail="Clip non presente nel montaggio")
+    if (body.duration_sec is None and body.transition_out is None
+            and body.ken_burns_movement is None):
+        raise HTTPException(status_code=400, detail="Niente da modificare: indica almeno un campo")
+
+    entry = state.setdefault("clip_overrides", {}).setdefault(media_id, {})
+    if body.duration_sec is not None:
+        d = round(float(body.duration_sec), 2)
+        if target.get("type") == "photo":
+            if not (clip_overrides.PHOTO_MANUAL_MIN_SEC <= d <= clip_overrides.PHOTO_MANUAL_MAX_SEC):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Durata foto {d}s fuori "
+                    f"[{clip_overrides.PHOTO_MANUAL_MIN_SEC}, {clip_overrides.PHOTO_MANUAL_MAX_SEC}]s")
+        else:
+            src = float(target.get("duration_sec") or 0.0)
+            if not (clip_overrides.VIDEO_MANUAL_MIN_SEC <= d <= src):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Durata video {d}s fuori [0.5, {src:.1f}]s (sorgente)")
+        entry["duration_sec"] = d
+    if body.transition_out is not None:
+        t = round(float(body.transition_out), 2)
+        is_last = edl[-1].get("media_id") == media_id
+        if is_last and t != 0.0:
+            raise HTTPException(status_code=400,
+                                detail="L'ultima clip non può avere transizione in uscita")
+        if t < 0.0 or t > clip_overrides.TRANS_MANUAL_MAX_SEC:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Transizione {t}s fuori [0.0, {clip_overrides.TRANS_MANUAL_MAX_SEC}]s "
+                f"(0.0 = stacco secco)")
+        entry["transition_out"] = t
+    if body.ken_burns_movement is not None:
+        mv = body.ken_burns_movement
+        if target.get("type") != "photo":
+            raise HTTPException(status_code=400, detail="Il movimento si imposta solo sulle foto")
+        if mv == "auto":
+            entry.pop("ken_burns", None)
+        elif mv in director_mod.MOVEMENTS or mv == "static":
+            entry["ken_burns"] = mv
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Movimento sconosciuto: {mv} "
+                f"({', '.join([*director_mod.MOVEMENTS, 'static', 'auto'])})")
+    if not entry:
+        state["clip_overrides"].pop(media_id, None)
+
+    state = await _run_stages(state, (("clip_overrides", clip_overrides.run),
+                                      ("timeline_compiler", timeline_compiler.run)))
+    state["qa_report"] = None  # piano cambiato a mano: il verdetto precedente non vale più
+    state_store.save_state(state)
+    return state
+
+
+@router.delete("/projects/{project_id}/edit/clips/{media_id}", response_model=ProjectState)
+async def reset_clip(project_id: str, media_id: str) -> dict:
+    """Toglie tutte le modifiche manuali di una clip (torna al piano del regista)."""
+    state = _get_state_or_404(project_id)
+    if not state.get("clip_overrides", {}).pop(media_id, None):
+        return state  # nessun override: niente da fare
+    if state.get("edit_decision_list"):
+        state = await _run_stages(state, (("clip_overrides", clip_overrides.run),
+                                          ("timeline_compiler", timeline_compiler.run)))
+        state["qa_report"] = None
+    state_store.save_state(state)
+    return state
+
+
+@router.post("/projects/{project_id}/render", response_model=ProjectState)
+async def render_video(project_id: str, background: bool = False) -> dict:
+    """M5/M6: esportazione end-to-end (piano fresco + render + QA con retry).
+
+    Riesegue Sequence -> Director -> Compiler (idempotenti) poi Render e QA;
+    se il QA rigetta per motivi creativi, una ripianificazione con qa_feedback.
+    Con background=true accoda invece un job (202) per progetti lunghi.
+    Il download e' su GET /projects/{id}/download.
+    """
+    state = _get_state_or_404(project_id)
+    if not state.get("media"):
+        raise HTTPException(status_code=400, detail="Nessun media: carica prima foto/video")
+    
+    # SECURITY: rate limiting su render sincrono (DoS)
+    if not background:
+        now = time.time()
+        last = _last_render_time.get(project_id, 0)
+        if now - last < _RENDER_RATE_LIMIT_SEC:
+            wait_sec = int(_RENDER_RATE_LIMIT_SEC - (now - last))
+            raise HTTPException(
+                status_code=429,
+                detail=f"Attendi {wait_sec}s tra i render"
+            )
+        _last_render_time[project_id] = now
+    
+    if background:
+        try:
+            job = jobs.submit(project_id, "render")
+        except jobs.JobExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        return JSONResponse(status_code=202, content={"job": _public_job(job)})
+    state = await _run_stages(state, (("sequence", sequence.run),
+                                      ("edit_director", edit_director.run),
+                                      ("clip_overrides", clip_overrides.run),
+                                      ("timeline_compiler", timeline_compiler.run),
+                                      ("render", render_agent.run)))
+    if not (state.get("render_manifest") or {}).get("status") == "done":
+        raise HTTPException(status_code=500, detail="render: manifest non completato")
+    try:
+        state = await run_qa_with_retry(state)
+    except Exception as exc:
+        state_store.save_state(state)
+        raise HTTPException(status_code=500, detail=f"{exc}") from None
+    state_store.save_state(state)
+    return state
+
+
+@router.get("/projects/{project_id}/download")
+def download_video(project_id: str):
+    """M5: scarica l'mp4 finale (404 se mai renderizzato, 404 se file mancante)."""
+    state = _get_state_or_404(project_id)
+    out_path = (state.get("render_manifest") or {}).get("output", {}).get("path")
+    if not out_path:
+        raise HTTPException(status_code=404, detail="Nessun video renderizzato: usa prima Esporta")
+    p = Path(out_path)
+    if not p.is_absolute():
+        p = state_store.project_dir(project_id) / p
+    
+    # SECURITY: verifica anti path-traversal unificata
+    resolved = _ensure_path_within_project(project_id, p)
+    
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="File video mancante su disco")
+    return FileResponse(path=str(resolved), media_type="video/mp4",
+                        filename=f"video-{project_id}.mp4")
+
+
+def _ensure_path_within_project(project_id: str, path: Path) -> Path:
+    """Helper unificato per verificare che un path sia dentro la sandbox del progetto.
+    
+    SECURITY: previene path-traversal attacks risolvendo il path assoluto
+    e verificando che sia contenuto nella root del progetto.
+    """
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Percorso non valido")
+    
+    project_root = state_store.project_dir(project_id).resolve()
+    try:
+        resolved.relative_to(project_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Accesso negato: percorso fuori sandbox")
+    
+    return resolved
+
+
+def _resolve_media_path(project_id: str, media_id: str) -> tuple[dict, Path]:
+    """Metadata + path assoluto verificato (dentro il progetto, esistente)."""
+    state = _get_state_or_404(project_id)
+    target = next((m for m in state.get("media", []) if m["id"] == media_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Media non trovato")
+    p = Path(target["path"])
+    if not p.is_absolute():
+        p = state_store.project_dir(project_id) / p
+    
+    # SECURITY: usa helper unificato anti path-traversal
+    resolved = _ensure_path_within_project(project_id, p)
+    
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="File media mancante su disco")
+    return target, resolved
+
+
+@router.get("/projects/{project_id}/media/{media_id}/file")
+def get_media_file(project_id: str, media_id: str):
+    """M2: serve il file originale per le anteprime nella timeline.
+
+    Risolve il path dal Project State (non dal nome file richiesto) e verifica
+    che resti dentro la cartella del progetto (anti path-traversal).
+    """
+    _, resolved = _resolve_media_path(project_id, media_id)
+    media_type, _ = mimetypes.guess_type(resolved.name)
+    return FileResponse(path=str(resolved), media_type=media_type or "application/octet-stream")
+
+
+def _photo_thumb(src: Path, dest: Path, w: int) -> None:
+    from PIL import Image, ImageOps
+    with Image.open(src) as im:
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        im.thumbnail((w, w * 4))
+        im.save(dest, "JPEG", quality=72)
+
+
+def _video_thumb(src: Path, dest: Path, w: int, target: dict) -> None:
+    ts = float(target.get("trim_start_sec") or 0.0)
+    te = target.get("trim_end_sec")
+    eff = (float(te) - ts) if te else float(target.get("duration_sec") or 2.0)
+    ss = round(ts + max(0.1, min(2.0, eff * 0.1)), 2)
+    for attempt_ss in (ss, 0):
+        proc = subprocess.run(
+            ["ffmpeg", "-v", "error", "-ss", str(attempt_ss), "-i", str(src),
+             "-frames:v", "1", "-vf", f"scale={w}:-2", "-q:v", "4", str(dest)],
+            capture_output=True)
+        if proc.returncode == 0 and dest.is_file():
+            return
+    raise RuntimeError(f"thumb video non generabile: {src.name}")
+
+
+@router.get("/projects/{project_id}/media/{media_id}/thumb")
+def get_media_thumb(project_id: str, media_id: str,
+                    w: int = Query(320, ge=64, le=960)):
+    """Polish: anteprima JPEG leggera con cache (foto via Pillow, video via ffmpeg).
+
+    La timeline usa queste invece degli originali (centinaia di file OK).
+    """
+    target, src = _resolve_media_path(project_id, media_id)
+    tdir = state_store.thumbs_dir(project_id)
+    tdir.mkdir(parents=True, exist_ok=True)
+    thumb = tdir / f"{media_id}_w{w}.jpg"
+    fresh = thumb.is_file() and thumb.stat().st_mtime >= src.stat().st_mtime
+    if not fresh:
+        try:
+            if target["type"] == "photo":
+                _photo_thumb(src, thumb, w)
+            else:
+                _video_thumb(src, thumb, w, target)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Anteprima non generabile: {exc}") from None
+    return FileResponse(path=str(thumb), media_type="image/jpeg")
+
+
+def _public_job(job: dict) -> dict:
+    status_map = {"queued": "pending", "running": "running", "done": "completed", "failed": "failed"}
+    return {
+        "id": job.get("job_id") or job.get("id"),
+        "kind": job.get("kind"),
+        "status": status_map.get(job.get("status"), job.get("status")),
+        "error": job.get("error"),
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+        "progress": job.get("progress"),
+    }
+
+
+def progress_payload(state: dict) -> dict:
+    """Snapshot leggero per la UI realtime (M8): avanzamento, errori, esiti."""
+    manifest = state.get("render_manifest") or {}
+    qa = state.get("qa_report") or {}
+    return {
+        "pipeline_log": (state.get("pipeline_log") or [])[-100:],
+        "errors_count": len(state.get("errors", [])),
+        "media_count": len(state.get("media", [])),
+        "has_audio": bool((state.get("audio") or {}).get("path")),
+        "has_edit": bool(state.get("edit_decision_list")),
+        "has_render": bool(manifest.get("status") == "done"),
+        "qa_status": qa.get("status"),
+        "updated_at": state.get("updated_at", 0),
+        "jobs": [_public_job(j) for j in jobs.recent_for_project(state.get("project_id", ""), 5)],
+    }
+
+
+@router.get("/jobs/{job_id}")
+def get_job(job_id: str) -> dict:
+    """Stato di un job in coda (202 submit -> poll fino a done/failed)."""
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job non trovato")
+    return job
+
+
+@router.get("/projects/{project_id}/events")
+async def project_events(project_id: str):
+    """M8: stream SSE con lo snapshot di avanzamento a ogni cambiamento.
+
+    Il client riceve subito uno snapshot e poi un evento per ogni modifica
+    dello state (upload, reorder, import, render...), piu' heartbeat.
+    La chiusura del client cancella il task (fine stream ordinata).
+    """
+    _get_state_or_404(project_id)
+    return StreamingResponse(watch_project(project_id),
+                             media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+async def watch_project(project_id: str, poll_sec: float = 1.0,
+                        heartbeat_every: int = 15):
+    """Generatore SSE (anche per test): snapshot a ogni modifica + ping.
+
+    Termina se il progetto sparisce o se il consumer chiude (CancelledError).
+    """
+    last: str | None = None
+    idle = 0
+    try:
+        while True:
+            try:
+                state = state_store.load_state(project_id)
+            except FileNotFoundError:
+                break
+            payload = json.dumps(progress_payload(state), ensure_ascii=False)
+            if payload != last:
+                last = payload
+                idle = 0
+                yield f"data: {payload}\n\n"
+            else:
+                idle += 1
+                if idle >= heartbeat_every:
+                    idle = 0
+                    yield ": ping\n\n"
+            await asyncio.sleep(poll_sec)
+    except asyncio.CancelledError:
+        pass
+
+
+@router.post("/projects/{project_id}/errors/clear", response_model=ProjectState)
+def clear_errors(project_id: str) -> dict:
+    """M8: azzera gli errori non bloccanti dopo che l'utente li ha visionati."""
+    state = _get_state_or_404(project_id)
+    state["errors"] = []
+    state_store.save_state(state)
+    return state
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: str) -> dict:
+    """Elimina un progetto e tutti i suoi file associati."""
+    try:
+        state = state_store.load_state(project_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Progetto non trovato") from None
+    
+    # Elimina tutti i file del progetto
+    project_path = state_store.project_dir(project_id)
+    if project_path.exists():
+        shutil.rmtree(project_path)
+    
     return {"message": "Progetto eliminato con successo", "project_id": project_id}
