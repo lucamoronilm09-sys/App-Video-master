@@ -28,23 +28,18 @@ DEFAULT_DRIVE_HOST = "http://127.0.0.1:8000"
 
 
 def _resolve_drive_host(request: Request | None = None) -> str:
-    """Resolve the public BACKEND host used by Google's OAuth redirect.
+    """Resolve the backend host used by Google's OAuth redirect.
 
-    Behind Next.js, the incoming Host header can belong to localhost:3000 even
-    though this callback is served by FastAPI on :8000. DRIVE_HOST is therefore
-    authoritative; an inferred host is accepted only for direct backend access.
+    In local development the OAuth redirect MUST stay on the backend (:8000).
+    The frontend is served on :3000 and proxies /api requests to FastAPI; using
+    the incoming Host header here would incorrectly register localhost:3000 as
+    Google's redirect URI. For production, DRIVE_HOST is authoritative.
     """
     env_host = os.getenv("DRIVE_HOST", "").strip()
     if env_host:
         return env_host.rstrip("/")
-
-    if request is not None:
-        proto = request.headers.get("x-forwarded-proto") or request.url.scheme
-        host = request.headers.get("x-forwarded-host") or request.headers.get("host")
-        if host and request.url.port == 8000:
-            return f"{proto}://{host}"
-
     return DEFAULT_DRIVE_HOST
+
 
 def _drive_error(exc: Exception) -> HTTPException:
     if isinstance(exc, RuntimeError):
