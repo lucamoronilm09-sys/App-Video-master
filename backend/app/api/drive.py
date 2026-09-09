@@ -66,8 +66,6 @@ def _drive_error(exc: Exception) -> HTTPException:
         if 400 <= status < 500:
             return HTTPException(status_code=status, detail=f"Errore Google Drive: {exc}")
         return HTTPException(status_code=502, detail=f"Errore Google Drive: {exc}")
-    # asyncio.TimeoutError è alias di TimeoutError da Python 3.11: copre anche
-    # i timeout del download per-file.
     if isinstance(exc, TimeoutError):
         return HTTPException(status_code=504, detail="Timeout durante la comunicazione con Google Drive (riprova più tardi)")
     logger.exception("drive: errore non gestito")
@@ -99,7 +97,7 @@ def drive_status() -> dict:
 @router.get("/drive/auth-url")
 def drive_auth_url(request: Request) -> dict:
     try:
-        host = os.getenv("DRIVE_HOST", "").strip().rstrip("/") or DEFAULT_DRIVE_HOST
+        host = _resolve_drive_host(request)
         return {"url": dc.get_authorization_url(host)}
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
@@ -161,9 +159,13 @@ def drive_files(project_id: str, folder_id: str = "root",
                 page_token: str | None = None, page_size: int = 100,
                 shared: bool = False) -> dict:
     _get_state_or_404(project_id)
+    # The frontend historically used the virtual folder id "shared" because the
+    # browse API did not expose a dedicated route parameter. Treat that id as an
+    # alias for the sharedWithMe view so both old and new clients work.
+    effective_shared = shared or folder_id == "shared"
     try:
         service = dc.get_drive_service()
-        if shared:
+        if effective_shared:
             batch = dc.list_shared_with_me(service, page_token, page_size)
             current = {"id": "shared", "name": "Condivisi con me"}
         else:
