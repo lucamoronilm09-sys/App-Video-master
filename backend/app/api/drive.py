@@ -16,27 +16,18 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from googleapiclient.errors import HttpError
 
 from app.agents import drive_import, intake, normalizer, sequence
-from app.api.routes import _get_state_or_404, _run_stages, _public_job
+from app.api.routes import _get_state_or_404, _run_stages, _public_job, progress_payload
 from app.api.schemas import DriveCredentialsRequest, DriveImportRequest, ProjectState
 from app.jobs import manager as jobs
 from app.pipeline import state as state_store
 from app.services import drive_client as dc
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
-
 DEFAULT_DRIVE_HOST = "http://127.0.0.1:8000"
 
 
 def _resolve_drive_host(request: Request | None = None) -> str:
-    """Risolve l'host pubblico del backend per gli redirect OAuth Drive.
-
-    Priorità:
-    1. Variabile d'ambiente DRIVE_HOST (es. https://api.example.com)
-    2. Se `request` è fornito: scheme + host dagli headers (X-Forwarded-Proto/Host)
-    3. Fallback di sviluppo http://127.0.0.1:8000
-    """
     env_host = os.getenv("DRIVE_HOST", "").strip()
     if env_host:
         return env_host.rstrip("/")
@@ -56,11 +47,9 @@ def _drive_error(exc: Exception) -> HTTPException:
     if isinstance(exc, HttpError):
         status = exc.resp.status if hasattr(exc, "resp") and hasattr(exc.resp, "status") else 502
         if status == 401:
-            return HTTPException(status_code=401,
-                                 detail="Sessione Google Drive scaduta: riconnetti l'account e riprova")
+            return HTTPException(status_code=401, detail="Sessione Google Drive scaduta: riconnetti l'account e riprova")
         if status == 403:
-            return HTTPException(status_code=403,
-                                 detail=f"Google Drive ha negato l'accesso: {exc}")
+            return HTTPException(status_code=403, detail=f"Google Drive ha negato l'accesso: {exc}")
         if status == 404:
             return HTTPException(status_code=404, detail=f"File/cartella non trovato su Drive: {exc}")
         if 400 <= status < 500:
@@ -159,9 +148,6 @@ def drive_files(project_id: str, folder_id: str = "root",
                 page_token: str | None = None, page_size: int = 100,
                 shared: bool = False) -> dict:
     _get_state_or_404(project_id)
-    # The frontend historically used the virtual folder id "shared" because the
-    # browse API did not expose a dedicated route parameter. Treat that id as an
-    # alias for the sharedWithMe view so both old and new clients work.
     effective_shared = shared or folder_id == "shared"
     try:
         service = dc.get_drive_service()
@@ -178,13 +164,16 @@ def drive_files(project_id: str, folder_id: str = "root",
             "nextPageToken": batch.get("nextPageToken")}
 
 
+@router.get("/projects/{project_id}/progress")
+def project_progress(project_id: str) -> dict:
+    """Snapshot leggero per il polling fallback della UI."""
+    state = _get_state_or_404(project_id)
+    return progress_payload(state)
+
+
 @router.post("/projects/{project_id}/drive/import", response_model=ProjectState)
 async def drive_import_media(project_id: str, body: DriveImportRequest,
                              background: bool = False) -> dict:
-    """M7: importa da Drive (cartelle ricorsive + file) poi Intake come da grafo.
-
-    Con background=true accoda un job (202) con progress per-file.
-    """
     state = _get_state_or_404(project_id)
     if not body.file_ids and not body.folder_ids:
         raise HTTPException(status_code=400, detail="Seleziona almeno un file o una cartella")
