@@ -35,8 +35,8 @@ interface ClipRowProps {
 /** Riga editabile di una clip: durata, dissolvenza in uscita, movimento. */
 function ClipRow({ entry, index, isLast, media, overridden, disabled, onPatch, onReset }: ClipRowProps) {
   const isPhoto = (media?.type ?? (entry.ken_burns ? "photo" : "video")) === "photo";
-  const durMin = isPhoto ? 1.0 : 0.5;
-  const durMax = isPhoto ? 12.0 : Math.max(0.5, media?.duration_sec ?? 8.0);
+  const durMin = isPhoto ? 2.5 : 0.5;
+  const durMax = isPhoto ? 5.5 : Math.max(0.5, media?.duration_sec ?? 8.0);
   const [durText, setDurText] = useState(entry.duration_sec.toFixed(1));
   const [trans, setTrans] = useState(entry.transition_out);
   const [rowError, setRowError] = useState<string | null>(null);
@@ -83,7 +83,7 @@ function ClipRow({ entry, index, isLast, media, overridden, disabled, onPatch, o
       <div className="flex items-center gap-2 text-xs text-slate-300">
         <span className="font-bold text-slate-400">#{index + 1}</span>
         <span className="tabular-nums text-slate-500">⏱ {entry.start_sec_in_final_video.toFixed(1)}s</span>
-        <label className="flex items-center gap-1 tabular-nums" title={isPhoto ? "Durata foto (1–12s)" : `Durata video (0.5–${durMax.toFixed(1)}s, ricentra il taglio)`}>
+        <label className="flex items-center gap-1 tabular-nums" title={isPhoto ? "Durata foto (2.5–5.5s)" : `Durata video (0.5–${durMax.toFixed(1)}s, ricentra il taglio)`}>
           <input
             type="number"
             value={durText}
