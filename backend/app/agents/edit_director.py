@@ -29,7 +29,7 @@ PAN_MAX_FRAC = 0.12
 # Limiti per l'aggiustamento delle durate foto durante il fit-audio e beat-sync:
 # la durata finale di ogni foto resta sempre in [2.5, 6.0]s (scelta utente).
 PHOTO_ADJUSTED_MIN_SEC = 2.5
-PHOTO_ADJUSTED_MAX_SEC = 6.0
+PHOTO_ADJUSTED_MAX_SEC = 5.5
 PHOTO_DEFAULT_SEC = 4.5
 BEAT_TOL_SEC = 0.8
 NUDGE_MAX_SEC = 0.4
