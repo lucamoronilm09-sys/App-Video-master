@@ -26,6 +26,8 @@ class MediaItem(BaseModel):
     # fps nativo rilevato all'import (solo video; None per foto/non rilevabile).
     # La UI lo usa per consigliare un fps di output senza conversioni a scatti.
     source_fps: Optional[float] = None
+    face_count: int = 0
+    composition_score: float = 0.5
 
 
 class OutputSpec(BaseModel):
