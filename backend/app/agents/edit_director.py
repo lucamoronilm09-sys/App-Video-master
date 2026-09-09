@@ -1,21 +1,4 @@
-"""Agente 3: Edit Director (architettura sez. 5) — il "regista".
-
-Stile "album/ricordo": pacato, mai frenetico.
-- Foto: movimento Ken Burns a rotazione (mai due uguali consecutivi),
-  DOLCE (zoom <= 1.15x, pan <= 12% del frame).
-- Video: nessun Ken Burns (gia' in movimento), durate intoccabili (no speed-change).
-- Transizioni: solo crossfade 0.6-1.0s, con durata guidata dall'energia del
-  brano (morbide sui passaggi calmi, più brevi sull'energia) e mai due valori
-  identici consecutivi, per un ritmo meno meccanico.
-- Beat markers / energy: guida MORBIDA — micro-ritocchi alle foto (<=0.4s,
-  entro [2.5, 6.0]s) per avvicinare gli inizi clip ai beat, mai stretch bruschi.
-- Se c'e' audio: la durata totale viene adattata a quella dell'audio
-  distribuendo la differenza sulle foto (mai tagliare l'audio a meta' frase).
-
-Output: edit_decision_list [{media_id, start_sec_in_final_video, duration_sec,
-ken_burns|None, transition_in, transition_out}]. Deterministico per project_id
-(idempotenza): stesso ordine + stessa musica = stesso montaggio.
-"""
+"""Agente 3: Edit Director — pianificazione deterministica del montaggio."""
 from __future__ import annotations
 
 import hashlib
@@ -26,14 +9,11 @@ TRANS_MIN_SEC = 0.6
 TRANS_MAX_SEC = 1.0
 ZOOM_MAX = 1.15
 PAN_MAX_FRAC = 0.12
-# Limiti per l'aggiustamento delle durate foto durante il fit-audio e beat-sync:
-# la durata finale di ogni foto resta sempre in [2.5, 6.0]s (scelta utente).
 PHOTO_ADJUSTED_MIN_SEC = 2.5
-PHOTO_ADJUSTED_MAX_SEC = 5.5
+PHOTO_ADJUSTED_MAX_SEC = 6.0
 PHOTO_DEFAULT_SEC = 4.5
 BEAT_TOL_SEC = 0.8
 NUDGE_MAX_SEC = 0.4
-
 MOVEMENTS = ("pan_left", "pan_right", "zoom_in_slow", "zoom_out_slow", "pan_and_zoom_diag")
 
 
@@ -64,7 +44,6 @@ def _ken_burns_params(movement: str, rng: random.Random) -> dict[str, Any]:
         x = (1.0, 0.0) if movement == "pan_left" else (0.0, 1.0)
         return {"movement": movement, "zoom_from": 1.1, "zoom_to": 1.1,
                 "pan_x_from": x[0], "pan_x_to": x[1], "pan_y_from": 0.5, "pan_y_to": 0.5}
-    # pan_and_zoom_diag
     xa = (0.0, 1.0) if rng.random() < 0.5 else (1.0, 0.0)
     ya = (0.0, 1.0) if rng.random() < 0.5 else (1.0, 0.0)
     return {"movement": movement, "zoom_from": 1.0, "zoom_to": 1.12,
@@ -73,7 +52,6 @@ def _ken_burns_params(movement: str, rng: random.Random) -> dict[str, Any]:
 
 
 def _movement_cycle(n_photos: int, rng: random.Random) -> list[str]:
-    """Rotazione senza mai due movimenti uguali consecutivi (nemmeno a cavallo dei cicli)."""
     out: list[str] = []
     while len(out) < n_photos:
         cyc = rng.sample(list(MOVEMENTS), len(MOVEMENTS))
@@ -85,21 +63,41 @@ def _movement_cycle(n_photos: int, rng: random.Random) -> list[str]:
 
 def _nearest_marker(markers: list[float], t: float, tol: float) -> float | None:
     best: float | None = None
-    for m in markers:
-        d = m - t
-        if abs(d) <= tol and (best is None or abs(d) < abs(best - t)):
-            best = m
+    for marker in markers:
+        if abs(marker - t) <= tol and (best is None or abs(marker - t) < abs(best - t)):
+            best = marker
     return best
 
 
 def _distribute_diff(durations: list[float], photo_idx: list[int], diff: float) -> list[float]:
-    """Distribuisce diff sulle foto entro [PHOTO_ADJUSTED_MIN_SEC, PHOTO_ADJUSTED_MAX_SEC] (dalle ultime)."""
-    if not photo_idx or diff == 0:
-        return durations
-    share = diff / len(photo_idx)
+    """Distribuisce diff sulle foto rispettando i limiti individuali.
+
+    Usa la capacità residua di ogni foto, così una singola foto già a 6s non
+    assorbe una quota che dovrebbe spettare alle altre.
+    """
     out = list(durations)
-    for i in reversed(photo_idx):
-        out[i] = round(max(PHOTO_ADJUSTED_MIN_SEC, min(PHOTO_ADJUSTED_MAX_SEC, out[i] + share)), 2)
+    remaining = float(diff)
+    if not photo_idx or abs(remaining) < 1e-9:
+        return out
+    for _ in range(4):
+        active = [i for i in photo_idx if (
+            remaining > 0 and out[i] < PHOTO_ADJUSTED_MAX_SEC - 1e-9
+        ) or (
+            remaining < 0 and out[i] > PHOTO_ADJUSTED_MIN_SEC + 1e-9
+        )]
+        if not active:
+            break
+        share = remaining / len(active)
+        moved = 0.0
+        for i in active:
+            old = out[i]
+            target = old + share
+            new = max(PHOTO_ADJUSTED_MIN_SEC, min(PHOTO_ADJUSTED_MAX_SEC, target))
+            out[i] = round(new, 2)
+            moved += new - old
+        remaining -= moved
+        if abs(remaining) < 0.005:
+            break
     return out
 
 
@@ -128,10 +126,6 @@ async def run(project_state: dict) -> dict:
             starts.append(round(starts[i - 1] + durs[i - 1] - gaps[i - 1], 2))
         return starts
 
-    # Dissolvenze meno meccaniche: la durata segue l'energia del brano
-    # (calma -> dissolvenza più lunga e morbida, energia -> più breve) ed
-    # evita due valori identici consecutivi. Resta in [0.6, 1.0]s e
-    # deterministica (stesso progetto = stesso montaggio).
     energy = list((project_state.get("audio") or {}).get("energy_curve", []) or [])
     if energy:
         provisional = starts_for(durations)
@@ -142,8 +136,7 @@ async def run(project_state: dict) -> dict:
                 level = max(0.0, min(1.0, float(energy[idx])))
             except (TypeError, ValueError):
                 level = 0.5
-            g = round(max(TRANS_MIN_SEC, min(TRANS_MAX_SEC,
-                                            gaps[i] * (1.10 - 0.20 * level))), 2)
+            g = round(max(TRANS_MIN_SEC, min(TRANS_MAX_SEC, gaps[i] * (1.10 - 0.20 * level))), 2)
             tuned.append(g)
         for i in range(1, len(tuned)):
             if tuned[i] == tuned[i - 1]:
@@ -153,7 +146,6 @@ async def run(project_state: dict) -> dict:
                     tuned[i] = cand
         gaps = tuned
 
-    # Guida morbida: avvicina gli inizi clip ai beat ritoccando la foto precedente.
     markers = sorted(float(x) for x in (project_state.get("audio") or {}).get("beat_markers_sec", []))
     if markers:
         starts = starts_for(durations)
@@ -167,19 +159,17 @@ async def run(project_state: dict) -> dict:
                 durations[i - 1] = round(new_dur, 2)
                 starts = starts_for(durations)
 
-    # Adatta il totale alla durata audio distribuendo la differenza sulle foto.
     audio_dur = float((project_state.get("audio") or {}).get("duration_sec") or 0.0)
     photo_idx = [i for i, p in enumerate(is_photo) if p]
     if audio_dur > 0 and photo_idx:
-        total = _timeline_total(durations, gaps)
-        durations = _distribute_diff(durations, photo_idx, audio_dur - total)
+        durations = _distribute_diff(durations, photo_idx, audio_dur - _timeline_total(durations, gaps))
 
-    # Loop QA -> Edit Director (M6): il QA puo' chiedere di riadattare il
-    # totale (es. dopo un rigetto su durata); il feedback vince sull'audio-fit.
     for hint in project_state.get("qa_feedback", []) or []:
         if hint.get("type") == "fit_total" and hint.get("total_sec"):
-            total = _timeline_total(durations, gaps)
-            durations = _distribute_diff(durations, photo_idx, float(hint["total_sec"]) - total)
+            durations = _distribute_diff(
+                durations, photo_idx,
+                float(hint["total_sec"]) - _timeline_total(durations, gaps),
+            )
 
     starts = starts_for(durations)
     movements = _movement_cycle(sum(is_photo), rng)
