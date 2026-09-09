@@ -600,9 +600,8 @@ export default function ProjectPage() {
           {project && (
             <section className="surface rounded-3xl p-5">
               <AudioSection
-                audio={
-                  project.audio
-                }
+                audio={project.audio}
+                tracks={project.audio_tracks ?? []}
                 onUpload={
                   handleAudioUpload
                 }
