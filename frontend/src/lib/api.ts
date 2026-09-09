@@ -412,10 +412,10 @@ export async function resetClipOverride(
   );
 }
 
-export async function submitRenderJob(projectId: string): Promise<ProjectState> {
-  return fetchJson<ProjectState>(`${API_BASE}/projects/${projectId}/render`, {
-    method: "POST",
-  });
+export async function submitRenderJob(projectId: string): Promise<ProjectState | { job: Job }> {
+  const res = await fetch(`${API_BASE}/projects/${projectId}/render?background=true`, { method: "POST" });
+  if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+  return res.json();
 }
 
 export async function submitDriveImportJob(
@@ -424,11 +424,8 @@ export async function submitDriveImportJob(
   folderIds: string[],
   background: boolean = true
 ): Promise<ProjectState | { job: Job }> {
-  const url = new URL(`${API_BASE}/projects/${projectId}/drive/import`);
-  if (background) {
-    url.searchParams.set("background", "true");
-  }
-  const res = await fetch(url.toString(), {
+  const url = `${API_BASE}/projects/${projectId}/drive/import${background ? "?background=true" : ""}`;
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -499,10 +496,11 @@ export async function driveListFiles(
   folderId?: string,
   pageToken?: string
 ): Promise<{ current: { id: string; name: string }; entries: DriveEntry[]; nextPageToken?: string }> {
-  const url = new URL(`${API_BASE}/projects/${projectId}/drive/files`);
-  if (folderId) url.searchParams.set("folder_id", folderId);
-  if (pageToken) url.searchParams.set("page_token", pageToken);
-  return fetchJson<{ current: { id: string; name: string }; entries: DriveEntry[]; nextPageToken?: string }>(url.toString());
+  const params = new URLSearchParams();
+  if (folderId) params.set("folder_id", folderId);
+  if (pageToken) params.set("page_token", pageToken);
+  const qs = params.toString();
+  return fetchJson<{ current: { id: string; name: string }; entries: DriveEntry[]; nextPageToken?: string }>(`${API_BASE}/projects/${projectId}/drive/files${qs ? `?${qs}` : ""}`);
 }
 
 export function isJobActive(job?: Job | null): boolean {
