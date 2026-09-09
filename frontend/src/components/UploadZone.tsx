@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, DragEvent, ChangeEvent } from "react";
+import { useCallback, useRef, useState, DragEvent, ChangeEvent } from "react";
 import { uploadMedia } from "@/lib/api";
 
 interface UploadZoneProps {
@@ -159,7 +159,7 @@ export function UploadZone({ projectId, onUploadComplete, disabled }: UploadZone
             <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
               <div className="h-full bg-emerald-400 transition-all duration-300" style={{ width: `${progress}%` }} />
             </div>
-            <p className="text-sm text-slate-400">Caricamento a lotti… ${progress}%</p>
+            <p className="text-sm text-slate-400">Caricamento a lotti… {progress}%</p>
           </div>
         ) : error ? (
           <div className="text-left">
