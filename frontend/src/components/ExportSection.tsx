@@ -5,7 +5,7 @@ import { downloadUrl, isJobActive, type Job, type ProjectState } from "@/lib/api
 
 interface ExportSectionProps {
   project: ProjectState;
-  onSubmit: () => Promise<ProjectState>;
+  onSubmit: () => Promise<ProjectState | { job: Job }>;
   job?: Job | null;
 }
 
