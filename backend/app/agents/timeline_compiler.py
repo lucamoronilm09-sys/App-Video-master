@@ -312,20 +312,45 @@ async def run(project_state: dict) -> dict:
     if abs(total - creative) > len(edl) * (0.5 / fps) + 0.02:
         raise ValueError(f"totale manifest ({total}s) incoerente con EDL ({creative}s)")
 
-    # --- audio utente (solo quello: l'audio dei video e' scartato) ---
-    audio_path = (project_state.get("audio") or {}).get("path")
+    # --- playlist audio: più tracce in sequenza; se termina prima del video,
+    # la playlist viene ripetuta per evitare silenzio ---
+    tracks = list(project_state.get("audio_tracks") or [])
+    if not tracks:
+        legacy = (project_state.get("audio") or {}).get("path")
+        if legacy:
+            tracks = [project_state.get("audio") or {}]
     audio_block = None
-    if audio_path:
-        if not Path(audio_path).is_file():
-            raise ValueError(f"file audio mancante su disco: {audio_path}")
-        a_idx = len(inputs)
-        inputs.append({"index": a_idx, "path": audio_path, "kind": "audio"})
+    if tracks:
+        audio_labels = []
+        for ti, track in enumerate(tracks):
+            audio_path = track.get("path")
+            if not audio_path:
+                continue
+            if not Path(audio_path).is_file():
+                raise ValueError(f"file audio mancante su disco: {audio_path}")
+            a_idx = len(inputs)
+            inputs.append({"index": a_idx, "path": audio_path, "kind": "audio", "audio_track": ti})
+            lab = f"aud{ti}"
+            filters.append(
+                f"[{a_idx}:a]aformat=sample_rates=44100:channel_layouts=stereo,"
+                f"aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[{lab}]"
+            )
+            audio_labels.append(f"[{lab}]")
+        if not audio_labels:
+            raise ValueError("audio_tracks presenti ma nessun file audio valido")
+        if len(audio_labels) == 1:
+            playlist = audio_labels[0]
+        else:
+            playlist = "".join(audio_labels) + f"concat=n={len(audio_labels)}:v=0:a=1[a_playlist];"
+            filters.append(playlist)
+            playlist = "[a_playlist]"
+        # Loop della playlist per coprire tutta la durata del video.
+        looped = "[a_loop]"
         filters.append(
-            f"[{a_idx}:a]aformat=sample_rates=44100:channel_layouts=stereo,"
-            f"apad=whole_dur={total},atrim=duration={total},"
-            f"afade=t=in:d=0.5,afade=t=out:st={round(max(0.0, total - 1.0), 3)}:d=1[aout]"
+            f"{playlist}aloop=loop=-1:size=2147483647,atrim=duration={total},"
+            f"afade=t=in:d=0.5,afade=t=out:st={round(max(0.0, total - 1.0), 3)}:d=1{looped}"
         )
-        audio_block = {"input_index": a_idx, "path": audio_path}
+        audio_block = {"tracks": [{"path": t.get("path"), "name": t.get("name"), "duration_sec": t.get("duration_sec", 0)} for t in tracks]}
     else:
         # edge case: tutti video senza audio utente -> warning (sara' muto)
         all_videos = all(media_by_id[e["media_id"]]["type"] == "video" for e in edl)
