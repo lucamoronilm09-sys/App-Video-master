@@ -8,6 +8,7 @@ export interface HealthResponse {
 
 export interface ProjectSummary {
   project_id: string;
+  name?: string;
   media_count: number;
   has_audio: boolean;
   has_render: boolean;
@@ -139,6 +140,7 @@ export interface ProjectError {
 export interface ProjectState {
   schema_version: number;
   project_id: string;
+  name: string;
   media: MediaItem[];
   audio: AudioTrack;
   audio_tracks?: AudioTrack[];
@@ -222,11 +224,19 @@ export async function listProjects(): Promise<ProjectSummary[]> {
 }
 
 export async function deleteProject(projectId: string): Promise<void> {
-  await fetch(`${API_BASE}/projects/${projectId}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
 }
 
 export async function getProject(projectId: string): Promise<ProjectState> {
   return fetchJson<ProjectState>(`${API_BASE}/projects/${projectId}`);
+}
+
+export async function updateProject(projectId: string, name: string): Promise<ProjectState> {
+  return fetchJson<ProjectState>(`${API_BASE}/projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
 }
 
 export async function uploadMedia(projectId: string, files: File[]): Promise<ProjectState> {
