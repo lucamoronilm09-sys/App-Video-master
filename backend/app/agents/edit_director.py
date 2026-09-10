@@ -33,36 +33,53 @@ def _vision(item: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _people_factor(people: int, faces_clear: float) -> float:
+    """Diminishing returns: a readable 1-4 people adds value; a crowd alone does not."""
+    base = _clamp(people / 4.0, 0.0, 1.0)
+    return base * (0.45 + 0.55 * _f(faces_clear, 0.5))
+
+
 def _photo_score(item: dict[str, Any]) -> float:
+    """Editorial value: story/emotion/subject first, technical quality second."""
     v = _vision(item)
     try:
         people = max(0, int(v.get("people_count", item.get("face_count", 0))))
     except (TypeError, ValueError):
         people = 0
-    return _clamp(
-        0.36 * _f(v.get("importance", item.get("importance_score", 0.5)))
-        + 0.18 * _f(v.get("emotional_intensity", 0.5))
-        + 0.14 * _f(v.get("subject_clarity", item.get("detail_score", 0.5)))
-        + 0.12 * _f(v.get("visual_interest", item.get("composition_score", 0.5)))
-        + 0.08 * _f(item.get("sharpness_score", 0.5))
-        + 0.05 * _f(item.get("contrast_score", 0.5))
-        + 0.07 * _clamp(people / 4.0, 0.0, 1.0),
-        0.0, 1.0,
+    raw = (
+        0.27 * _f(v.get("story_value", v.get("importance", item.get("importance_score", 0.5))))
+        + 0.16 * _f(v.get("emotional_intensity", 0.5))
+        + 0.13 * _f(v.get("attention_score", 0.5))
+        + 0.10 * _f(v.get("subject_clarity", item.get("detail_score", 0.5)))
+        + 0.09 * _f(v.get("composition_balance", item.get("composition_score", 0.5)))
+        + 0.09 * _f(v.get("visual_quality", item.get("sharpness_score", 0.5)))
+        + 0.06 * _f(v.get("visual_interest", item.get("composition_score", 0.5)))
+        + 0.07 * _people_factor(people, _f(v.get("faces_clear", 0.5)))
+        + 0.03 * _f(item.get("color_score", 0.5))
     )
+    repetition = _f(v.get("repetition_risk", 0.25), 0.25)
+    # Repetition should reduce prominence without deleting otherwise meaningful photos.
+    raw -= 0.12 * repetition
+    return _clamp(raw, 0.0, 1.0)
 
 
 def _raw_photo_duration(item: dict[str, Any], music_energy: float) -> float:
     v = _vision(item)
-    duration = PHOTO_MIN_SEC + (PHOTO_MAX_SEC - PHOTO_MIN_SEC) * (_photo_score(item) ** 0.72)
-    duration += 0.55 * _f(v.get("emotional_intensity", 0.5))
-    duration -= 0.75 * _f(music_energy, 0.5)
-    duration += {"fast": -0.60, "slow": 0.65, "hold": 1.05}.get(str(v.get("recommended_pacing", "normal")).lower(), 0.0)
-    if bool(v.get("is_group_photo")):
-        duration += 0.25
+    score = _photo_score(item)
+    duration = PHOTO_MIN_SEC + (PHOTO_MAX_SEC - PHOTO_MIN_SEC) * (score ** 0.82)
+    duration += 0.75 * _f(v.get("story_value", v.get("importance", 0.5)), 0.5)
+    duration += 0.40 * _f(v.get("emotional_intensity", 0.5))
+    duration += 0.25 * _f(v.get("attention_score", 0.5))
+    duration += 0.20 * _f(v.get("faces_clear", 0.5)) if bool(v.get("is_group_photo")) else 0.0
+    duration -= 0.85 * _f(music_energy, 0.5)
+    duration -= 0.45 * _f(v.get("repetition_risk", 0.25), 0.25)
+    duration += {"fast": -0.75, "normal": 0.0, "slow": 0.75, "hold": 1.20}.get(str(v.get("recommended_pacing", "normal")).lower(), 0.0)
     if bool(v.get("is_closeup")):
-        duration += 0.15
+        duration += 0.20
     if bool(v.get("is_action")):
-        duration -= 0.25
+        duration -= 0.35
+    if str(v.get("recommended_focus", "scene")) == "detail":
+        duration += 0.20
     return _clamp(duration, PHOTO_MIN_SEC, PHOTO_MAX_SEC)
 
 
@@ -87,6 +104,7 @@ def _fit_total(durations: list[float], media: list[dict[str, Any]], target: floa
     if abs(diff) < 0.01:
         return out
     photos = [i for i, m in enumerate(media) if m.get("type") == "photo"]
+    # Extra time goes first to high-value photos; time pressure is taken first from low-value photos.
     ranked = sorted(photos, key=lambda i: _photo_score(media[i]), reverse=diff > 0)
     remaining = abs(diff)
     for i in ranked:
@@ -121,19 +139,32 @@ def _snap_to_beats(media: list[dict[str, Any]], wanted: list[float], beats: list
     cursor = 0.0
     for i, item in enumerate(media):
         if i == len(media) - 1:
-            # Only a final photo absorbs the exact endpoint. A final video keeps
-            # its source duration; a previous photo may absorb the remainder later.
             if item.get("type") == "photo":
-                out[i] = max(PHOTO_MIN_SEC, round(target_total - cursor, 3))
+                out[i] = _clamp(round(target_total - cursor, 3), PHOTO_MIN_SEC, PHOTO_MAX_SEC)
             break
         if item.get("type") == "photo":
             target_end = cursor + out[i]
-            max_end = min(cursor + PHOTO_MAX_SEC, target_total - PHOTO_MIN_SEC * sum(1 for m in media[i + 1:] if m.get("type") == "photo"))
+            remaining_photos = sum(1 for m in media[i + 1:] if m.get("type") == "photo")
+            max_end = min(cursor + PHOTO_MAX_SEC, target_total - PHOTO_MIN_SEC * remaining_photos)
             candidates = [b for b in beats if cursor + PHOTO_MIN_SEC - 1e-6 <= b <= max_end + 1e-6]
             if candidates:
-                out[i] = round(min(candidates, key=lambda b: abs(b - target_end)) - cursor, 3)
+                # Prefer beat points close to the desired duration, but don't create an extreme correction.
+                near = min(candidates, key=lambda b: abs(b - target_end))
+                candidate_duration = near - cursor
+                if abs(candidate_duration - out[i]) <= 0.75:
+                    out[i] = round(candidate_duration, 3)
         cursor += out[i]
     return out
+
+
+def _choose_movement(item: dict[str, Any], rng: random.Random, index: int) -> str:
+    v = _vision(item)
+    focus = str(v.get("recommended_focus", "scene"))
+    if bool(v.get("is_closeup")) or focus == "people":
+        return ("zoom_in_slow", "pan_left", "pan_right")[index % 3]
+    if bool(v.get("is_landscape")) or focus == "scene":
+        return ("pan_left", "pan_right", "pan_and_zoom_diag")[index % 3]
+    return MOVEMENTS[index % len(MOVEMENTS)] if index % 2 == 0 else rng.choice(list(MOVEMENTS))
 
 
 def _ken_burns_params(movement: str, rng: random.Random) -> dict[str, Any]:
@@ -147,16 +178,6 @@ def _ken_burns_params(movement: str, rng: random.Random) -> dict[str, Any]:
     xa = (0.0, 1.0) if rng.random() < 0.5 else (1.0, 0.0)
     ya = (0.0, 1.0) if rng.random() < 0.5 else (1.0, 0.0)
     return {"movement": movement, "zoom_from": 1.0, "zoom_to": 1.12, "pan_x_from": xa[0], "pan_x_to": xa[1], "pan_y_from": ya[0], "pan_y_to": ya[1]}
-
-
-def _movement_cycle(n: int, rng: random.Random) -> list[str]:
-    out: list[str] = []
-    while len(out) < n:
-        cycle = rng.sample(list(MOVEMENTS), len(MOVEMENTS))
-        if out and cycle[0] == out[-1]:
-            cycle[0], cycle[1] = cycle[1], cycle[0]
-        out.extend(cycle)
-    return out[:n]
 
 
 async def run(project_state: dict) -> dict:
@@ -182,36 +203,40 @@ async def run(project_state: dict) -> dict:
     if target_total > 0:
         durations = _fit_total(durations, media, target_total)
         durations = _snap_to_beats(media, durations, beats, target_total)
-
-        # If the final photo is not exactly the remaining endpoint, adjust only
-        # the last photo. This never changes a video source duration.
         diff = round(target_total - sum(durations), 3)
         if abs(diff) > 0.01:
             last_photo = next((j for j in reversed(range(len(media))) if media[j].get("type") == "photo"), None)
             if last_photo is not None:
                 durations[last_photo] = round(_clamp(durations[last_photo] + diff, PHOTO_MIN_SEC, PHOTO_MAX_SEC), 3)
 
-    photo_count = sum(m.get("type") == "photo" for m in media)
     rng = _rng(str(project_state.get("project_id", "")))
-    movements = _movement_cycle(photo_count, rng)
-    movement_index = 0
     edl: list[dict[str, Any]] = []
     cursor = 0.0
+    photo_index = 0
+    energy = list(audio.get("energy_curve") or [])
 
     for i, item in enumerate(media):
         duration = round(float(durations[i]), 3)
+        v = _vision(item)
         if item.get("type") == "photo":
             item["duration_sec"] = duration
             item["ai_duration_sec"] = duration
             item["ai_edit_score"] = round(_photo_score(item), 3)
             item["duration_source"] = "ai_music" if audio_dur > 0 else "vision"
             item["music_sync"] = bool(beats)
-            kb = _ken_burns_params(movements[movement_index], rng)
-            movement_index += 1
+            item["vision_ai_used"] = bool(v.get("ai_used", item.get("vision_ai_used", False)))
+            item["people_count"] = int(v.get("people_count", item.get("people_count", 0)) or 0)
+            item["importance_score"] = round(_photo_score(item), 3)
+            movement = _choose_movement(item, rng, photo_index)
+            kb = _ken_burns_params(movement, rng)
+            photo_index += 1
         else:
             kb = None
 
-        transition_in = 0.0 if beats or i == 0 else round(_clamp(0.75 - 0.25 * _energy_at(list(audio.get("energy_curve") or []), cursor), TRANS_MIN_SEC, TRANS_MAX_SEC), 3)
+        # With a real beat grid we use hard cuts; otherwise transitions respond to music energy.
+        transition_in = 0.0 if i == 0 or beats else round(
+            _clamp(0.78 - 0.28 * _energy_at(energy, cursor), TRANS_MIN_SEC, TRANS_MAX_SEC), 3
+        )
         edl.append({
             "media_id": item["id"],
             "start_sec_in_final_video": round(cursor, 3),
@@ -221,25 +246,11 @@ async def run(project_state: dict) -> dict:
             "transition_out": transition_in if i < len(media) - 1 else 0.0,
             "editorial_score": round(_photo_score(item), 3) if item.get("type") == "photo" else None,
             "duration_reason": "vision+music" if item.get("type") == "photo" and audio_dur > 0 else "vision" if item.get("type") == "photo" else "source-video-duration",
+            "vision_scene": v.get("scene_type") if item.get("type") == "photo" else None,
         })
         cursor += duration
         if transition_in > 0:
             cursor -= transition_in
-
-    if audio_dur > 0 and beats and edl:
-        # Reconcile fractional drift while respecting photo duration limits.
-        actual = sum(float(e["duration_sec"]) for e in edl)
-        delta = round(audio_dur - actual, 3)
-        if abs(delta) > 0.01:
-            last_photo = next((j for j in reversed(range(len(edl))) if media[j].get("type") == "photo"), None)
-            if last_photo is not None:
-                adjusted = _clamp(float(edl[last_photo]["duration_sec"]) + delta, PHOTO_MIN_SEC, PHOTO_MAX_SEC)
-                edl[last_photo]["duration_sec"] = round(adjusted, 3)
-                media[last_photo]["duration_sec"] = edl[last_photo]["duration_sec"]
-                cursor = 0.0
-                for entry in edl:
-                    entry["start_sec_in_final_video"] = round(cursor, 3)
-                    cursor += float(entry["duration_sec"])
 
     project_state["edit_decision_list"] = edl
     project_state["edit_summary"] = {
@@ -247,6 +258,9 @@ async def run(project_state: dict) -> dict:
         "total_photos": photo_count,
         "music_synced": bool(beats),
         "bpm": audio.get("bpm", 0.0),
+        "average_photo_score": round(
+            sum(_photo_score(m) for m in media if m.get("type") == "photo") / max(1, photo_count), 3
+        ),
         "planned_duration_sec": round(sum(float(e["duration_sec"]) for e in edl) - sum(float(e["transition_in"]) for e in edl[1:]), 3),
     }
     return project_state
