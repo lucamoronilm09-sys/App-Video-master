@@ -1,15 +1,16 @@
-"""Agente 5: Render (architettura sez. 5).
+"""Agente 5: Render.
 
-Esegue il render_manifest invocando FFmpeg con i parametri forniti, SENZA
-reinterpretarli o modificarli. Output mp4 H.264 (H.265 solo su richiesta
-esplicita, non implementata in M5), risoluzione/fps da output_spec via manifest.
-Manifest assente (es. progetto vuoto) -> no-op.
-Fallimento -> errore tecnico esatto in errors[] + eccezione (il flusso
-downstream si interrompe; la correzione spetta agli agenti a monte).
+Esegue il render FFmpeg dal render_manifest. Per comandi brevi usa il percorso
+normale; quando la command line supera una soglia sicura per Windows, passa
+a un render segmentato: ogni clip viene preparata separatamente e poi unita
+in modo incrementale, evitando WinError 206 senza perdere transizioni.
 """
 from __future__ import annotations
 
 import asyncio
+import os
+import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -18,8 +19,8 @@ from typing import Any
 
 from app.jobs import progress as prog
 
-# Limite di sicurezza per render impazziti (progetti normali: pochi minuti).
 RENDER_TIMEOUT_SEC = 1800
+WINDOWS_CMDLINE_SAFE_LIMIT = 24000
 
 
 def _read_fraction(progress_file: Path, total_sec: float) -> float | None:
@@ -39,12 +40,15 @@ def _read_fraction(progress_file: Path, total_sec: float) -> float | None:
 
 def _run_ffmpeg(args: list[str], total_sec: float = 0.0,
                 job_id: str | None = None) -> subprocess.CompletedProcess:
-    """Esegue ffmpeg. Mai pipe senza drenaggio (hang su Windows): o run() con
-    communicate, o stderr su file. Con job_id, progress reale via -progress."""
     if job_id and total_sec > 0:
         return _run_ffmpeg_progress(args, total_sec, job_id)
-    return subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True,
-                          text=True, timeout=RENDER_TIMEOUT_SEC)
+    return subprocess.run(
+        args,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=RENDER_TIMEOUT_SEC,
+    )
 
 
 def _run_ffmpeg_progress(args: list[str], total_sec: float,
@@ -56,19 +60,22 @@ def _run_ffmpeg_progress(args: list[str], total_sec: float,
     pargs = args[:-1] + ["-progress", str(pf), "-nostats", args[-1]]
     start = time.time()
     with open(ef, "w", encoding="utf-8", errors="ignore") as errfh:
-        proc = subprocess.Popen(pargs, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL, stderr=errfh)
+        proc = subprocess.Popen(
+            pargs,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=errfh,
+        )
         while proc.poll() is None:
             if time.time() - start > RENDER_TIMEOUT_SEC:
                 proc.kill()
-                proc.wait()  # attendi cleanup per evitare zombie
+                proc.wait()
                 raise subprocess.TimeoutExpired(pargs, RENDER_TIMEOUT_SEC)
             frac = _read_fraction(pf, total_sec)
             if frac is not None:
                 prog.set(job_id, frac, "rendering ffmpeg")
             time.sleep(0.5)
     try:
-        # leggi tutto lo stderr (no truncation per non perdere errori critici)
         tail = ef.read_text(encoding="utf-8", errors="ignore")
     finally:
         for f in (pf, ef):
@@ -79,10 +86,249 @@ def _run_ffmpeg_progress(args: list[str], total_sec: float,
     return subprocess.CompletedProcess(pargs, proc.returncode, "", tail)
 
 
+def _cmdline_length(args: list[str]) -> int:
+    # Windows CreateProcess lavora su una command line finita; teniamo un
+    # margine per quotatura/runtime e non contiamo solo i caratteri visibili.
+    return len(" ".join(str(x) for x in args))
+
+
+def _input_paths_from_args(args: list[str]) -> list[str]:
+    paths: list[str] = []
+    i = 0
+    while i < len(args) - 1:
+        if args[i] == "-i":
+            paths.append(str(args[i + 1]))
+            i += 2
+            continue
+        i += 1
+    return paths
+
+
+def _extract_segment_filter(script_path: Path, input_index: int) -> str:
+    """Estrae dal filter graph completo solo la catena della clip richiesta."""
+    text = script_path.read_text(encoding="utf-8", errors="ignore")
+    lines = [line.strip() for line in text.split(";") if line.strip()]
+    labels = {
+        f"pbg{input_index}", f"pfg{input_index}",
+        f"bg{input_index}", f"fg{input_index}",
+        f"vibg{input_index}", f"vifg{input_index}",
+        f"v{input_index}",
+    }
+    selected: list[str] = []
+    label_re = re.compile(r"\[([^\]]+)\]")
+    for line in lines:
+        if "xfade=" in line or "concat=n=" in line or "format=yuv420p[vout]" in line:
+            continue
+        if any(label in labels for label in label_re.findall(line)):
+            if re.search(rf"\[{input_index}:v\]", line):
+                selected.append(line)
+            elif any(f"[{label}]" in line for label in labels):
+                selected.append(line)
+    if not selected:
+        raise RuntimeError(f"Impossibile estrarre il filtro della clip {input_index}")
+    graph = ";\n".join(selected)
+    # La clip standalone usa sempre l'ingresso 0 e produce [vout].
+    graph = graph.replace(f"[{input_index}:v]", "[0:v]")
+    graph = graph.replace(f"[v{input_index}]", "[vout]")
+    return graph
+
+
+def _run_checked(args: list[str], description: str) -> None:
+    proc = subprocess.run(
+        args,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=RENDER_TIMEOUT_SEC,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise RuntimeError(f"{description}: ffmpeg exit={proc.returncode}: {detail}")
+
+
+def _segment_input_args(kind: str, path: str, fps: int) -> list[str]:
+    if kind == "photo":
+        return ["-loop", "1", "-framerate", str(fps), "-i", path]
+    return ["-i", path]
+
+
+def _encode_segment(
+    segment: dict[str, Any],
+    input_path: str,
+    script_path: Path,
+    fps: int,
+    vcodec: str,
+    crf: int,
+    out_path: Path,
+) -> None:
+    index = int(segment["input_index"])
+    graph = _extract_segment_filter(script_path, index)
+    args = ["ffmpeg", "-y", "-sws_flags", "lanczos+accurate_rnd+full_chroma_int"]
+    args += _segment_input_args(str(segment["kind"]), input_path, fps)
+    args += [
+        "-filter_complex", graph,
+        "-map", "[vout]",
+        "-c:v", vcodec,
+        "-preset", "medium",
+        "-crf", str(crf),
+        "-pix_fmt", "yuv420p",
+        "-r", str(fps),
+        "-an",
+        str(out_path),
+    ]
+    _run_checked(args, f"render segmento {index + 1}")
+
+
+def _merge_two_video_segments(
+    left: Path,
+    right: Path,
+    duration_left: float,
+    transition: float,
+    fps: int,
+    vcodec: str,
+    crf: int,
+    out_path: Path,
+) -> float:
+    if transition > 0:
+        offset = max(0.0, duration_left - transition)
+        graph = f"[0:v][1:v]xfade=transition=fade:duration={transition:.3f}:offset={offset:.3f}[vout]"
+        new_duration = round(duration_left + _probe_duration(right) - transition, 3)
+    else:
+        graph = "[0:v][1:v]concat=n=2:v=1:a=0[vout]"
+        new_duration = round(duration_left + _probe_duration(right), 3)
+
+    args = [
+        "ffmpeg", "-y", "-i", str(left), "-i", str(right),
+        "-filter_complex", graph, "-map", "[vout]",
+        "-c:v", vcodec, "-preset", "medium", "-crf", str(crf),
+        "-pix_fmt", "yuv420p", "-r", str(fps), "-an", str(out_path),
+    ]
+    _run_checked(args, "unione segmenti")
+    return new_duration
+
+
+def _probe_duration(path: Path) -> float:
+    proc = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffprobe fallito su {path}: {(proc.stderr or '').strip()}")
+    try:
+        return float((proc.stdout or "").strip())
+    except ValueError as exc:
+        raise RuntimeError(f"durata non leggibile per {path}") from exc
+
+
+def _render_segmented(manifest: dict[str, Any], job_id: str | None) -> Path:
+    output = Path(manifest["output"]["path"])
+    fps = int(manifest.get("fps", 30))
+    vcodec = "libx264" if manifest.get("vcodec", "h264") == "h264" else "libx265"
+    crf = 18 if vcodec == "libx264" else 20
+    segments = list(manifest.get("segments") or [])
+    transitions = list(manifest.get("transitions") or [])
+    script_path = Path(manifest.get("filter_complex_script", ""))
+    if not segments or not script_path.is_file():
+        raise RuntimeError("Manifest non sufficiente per il render segmentato")
+
+    input_paths = _input_paths_from_args(list(manifest.get("args") or []))
+    if len(input_paths) < len(segments):
+        raise RuntimeError("Numero input FFmpeg insufficiente per il render segmentato")
+
+    work = output.parent / f".render_parts_{job_id or int(time.time())}"
+    work.mkdir(parents=True, exist_ok=True)
+    try:
+        rendered: list[Path] = []
+        durations: list[float] = []
+        total = float(manifest.get("total_sec") or 1.0)
+        completed = 0.0
+        for i, segment in enumerate(segments):
+            part = work / f"seg_{i:04d}.mp4"
+            _encode_segment(
+                segment,
+                input_paths[int(segment["input_index"])],
+                script_path,
+                fps,
+                vcodec,
+                crf,
+                part,
+            )
+            rendered.append(part)
+            dur = _probe_duration(part)
+            durations.append(dur)
+            completed += dur
+            if job_id:
+                prog.set(job_id, min(0.55, 0.05 + 0.50 * completed / max(total, 0.01)), f"clip {i + 1}/{len(segments)}")
+
+        current = rendered[0]
+        current_duration = durations[0]
+        for i in range(1, len(rendered)):
+            merged = work / f"merge_{i:04d}.mp4"
+            trans = float((transitions[i - 1] if i - 1 < len(transitions) else {}).get("duration_sec", 0.0) or 0.0)
+            current_duration = _merge_two_video_segments(
+                current,
+                rendered[i],
+                current_duration,
+                trans,
+                fps,
+                vcodec,
+                crf,
+                merged,
+            )
+            current = merged
+            if job_id:
+                prog.set(job_id, min(0.85, 0.55 + 0.30 * i / max(1, len(rendered) - 1)), f"unione clip {i + 1}/{len(rendered)}")
+
+        audio = manifest.get("audio") or {}
+        tracks = list(audio.get("tracks") or [])
+        if tracks:
+            audio_mix = work / "audio.m4a"
+            audio_args = ["ffmpeg", "-y"]
+            labels: list[str] = []
+            for idx, track in enumerate(tracks):
+                path = track.get("path")
+                if not path:
+                    raise RuntimeError("Traccia audio senza path")
+                audio_args += ["-i", str(path)]
+                labels.append(f"[{idx}:a]")
+            if len(labels) == 1:
+                graph = f"{labels[0]}aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS,aloop=loop=-1:size=2147483647,atrim=duration={float(manifest.get('total_sec') or 0.0):.3f},afade=t=in:d=0.5,afade=t=out:st={max(0.0, float(manifest.get('total_sec') or 0.0)-1.0):.3f}:d=1[aout]"
+            else:
+                graph = "".join(labels) + f"concat=n={len(labels)}:v=0:a=1[a]"
+                graph += f";[a]aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS,aloop=loop=-1:size=2147483647,atrim=duration={float(manifest.get('total_sec') or 0.0):.3f},afade=t=in:d=0.5,afade=t=out:st={max(0.0, float(manifest.get('total_sec') or 0.0)-1.0):.3f}:d=1[aout]"
+            _run_checked(audio_args + ["-filter_complex", graph, "-map", "[aout]", "-c:a", "aac", "-b:a", "160k", str(audio_mix)], "preparazione audio")
+
+            temp_output = work / "final.mp4"
+            mux_args = [
+                "ffmpeg", "-y", "-i", str(current), "-i", str(audio_mix),
+                "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac",
+                "-b:a", "160k", "-t", str(manifest.get("total_sec") or current_duration),
+                "-movflags", "+faststart", str(temp_output),
+            ]
+            _run_checked(mux_args, "mux video/audio")
+            current = temp_output
+        else:
+            final_noaudio = work / "final.mp4"
+            shutil.copy2(current, final_noaudio)
+            current = final_noaudio
+
+        output.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(current, output)
+        if job_id:
+            prog.set(job_id, 0.99, "render completato")
+        return output
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 async def run(project_state: dict) -> dict:
     manifest: dict[str, Any] | None = project_state.get("render_manifest")
     if not manifest:
-        return project_state  # niente da renderizzare
+        return project_state
 
     args = manifest.get("args")
     if not args:
@@ -94,15 +340,19 @@ async def run(project_state: dict) -> dict:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     total_sec = float(manifest.get("total_sec") or 0.0)
     job_id = project_state.get("_job_id")
+
     try:
-        proc = await asyncio.to_thread(_run_ffmpeg, list(args), total_sec, job_id)
+        if os.name == "nt" and _cmdline_length(list(args)) >= WINDOWS_CMDLINE_SAFE_LIMIT:
+            await asyncio.to_thread(_render_segmented, manifest, job_id)
+            proc = subprocess.CompletedProcess(list(args), 0, "", "")
+        else:
+            proc = await asyncio.to_thread(_run_ffmpeg, list(args), total_sec, job_id)
     except subprocess.TimeoutExpired as exc:
-        msg = f"ffmpeg timeout dopo {RENDER_TIMEOUT_SEC}s: {' '.join(list(args)[:4])}..."
+        msg = f"ffmpeg timeout dopo {RENDER_TIMEOUT_SEC}s"
         project_state.setdefault("errors", []).append({"stage": "render", "message": msg})
         raise RuntimeError(msg) from exc
 
     if proc.returncode != 0:
-        # stderr gia' completo (no truncation in _run_ffmpeg_progress)
         tail = (proc.stderr or "").strip()
         msg = f"ffmpeg exit={proc.returncode}: {tail}"
         project_state.setdefault("errors", []).append({"stage": "render", "message": msg})
