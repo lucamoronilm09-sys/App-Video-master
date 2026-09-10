@@ -20,12 +20,18 @@
 }
 
 html {
+  width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
   background: var(--background);
 }
 
 body {
+  width: 100%;
+  min-width: 0;
   min-height: 100vh;
   margin: 0;
+  overflow-x: hidden;
   color: var(--foreground);
   background:
     radial-gradient(circle at 10% 0%, rgba(139, 92, 246, 0.18), transparent 28%),
@@ -46,6 +52,8 @@ textarea {
 }
 
 .surface {
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid rgba(148, 163, 184, 0.14);
   background: linear-gradient(
     180deg,
@@ -57,6 +65,8 @@ textarea {
 }
 
 .surface-soft {
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid rgba(148, 163, 184, 0.1);
   background: rgba(15, 18, 28, 0.62);
 }
@@ -82,6 +92,10 @@ textarea {
 .app-shell {
   position: relative;
   isolation: isolate;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 .app-shell::before {
@@ -89,28 +103,66 @@ textarea {
   position: fixed;
   inset: 0;
   pointer-events: none;
-
   background-image:
-    linear-gradient(
-      rgba(255, 255, 255, 0.018) 1px,
-      transparent 1px
-    ),
-    linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.018) 1px,
-      transparent 1px
-    );
-
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
   background-size: 32px 32px;
-
-  mask-image: linear-gradient(
-    to bottom,
-    black,
-    transparent 85%
-  );
-
+  mask-image: linear-gradient(to bottom, black, transparent 85%);
   opacity: 0.32;
   z-index: -1;
+}
+
+/* The project page is one vertical workflow.  Keep every workspace card inside
+   the viewport even when a child component contains long controls/timelines. */
+.app-shell .mt-6.grid.gap-6 {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+.app-shell .mt-6.grid.gap-6 > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Desired workflow: Import → Montaggio → Audio → Export.
+   The selectors identify cards by their semantic contents, so the order does
+   not depend on whether the live-progress card is currently rendered. */
+.app-shell .mt-6.grid.gap-6 > section[aria-label="Import da Google Drive"] {
+  order: 10;
+}
+
+.app-shell .mt-6.grid.gap-6 > section:has(#file-upload) {
+  order: 20;
+}
+
+.app-shell .mt-6.grid.gap-6 > section:has(select[aria-label^="Movimento clip"]) {
+  order: 30;
+}
+
+.app-shell .mt-6.grid.gap-6 > section[aria-label="Tracce audio"] {
+  order: 40;
+}
+
+.app-shell .mt-6.grid.gap-6 > section[aria-label="Esportazione video"] {
+  order: 50;
+}
+
+/* Secondary controls stay after the main workflow. */
+.app-shell .mt-6.grid.gap-6 > section:has(select[aria-label="Risoluzione output"]) {
+  order: 60;
+}
+
+.app-shell .mt-6.grid.gap-6 > section:has(ol[aria-label="Timeline clip"]) {
+  order: 70;
+}
+
+@media (max-width: 900px) {
+  .app-shell .mt-6.grid.gap-6 {
+    gap: 1rem;
+  }
 }
 
 @media (prefers-reduced-motion: no-preference) {
