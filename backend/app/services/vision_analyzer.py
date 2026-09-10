@@ -22,6 +22,12 @@ from typing import Any
 from PIL import Image, ImageStat, ImageOps
 
 try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except ImportError:  # pragma: no cover - optional dependency
+    pillow_heif = None
+
+try:
     import cv2
 except ImportError:  # pragma: no cover - optional dependency
     cv2 = None
@@ -187,14 +193,10 @@ def _analyze_openai_compatible(image_b64: str) -> dict[str, Any]:
         raise VisionError("VISION_BASE_URL e VISION_MODEL non configurati")
     result = _post_json(
         f"{base}/chat/completions",
-        {
-            "model": model,
-            "temperature": 0,
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": PROMPT},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-            ]}],
-        },
+        {"model": model, "temperature": 0, "messages": [{"role": "user", "content": [
+            {"type": "text", "text": PROMPT},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+        ]}]},
         {"Authorization": f"Bearer {_api_key()}"} if _api_key() else None,
     )
     choices = result.get("choices") or []
@@ -248,13 +250,13 @@ def _technical_fallback(path: Path) -> dict[str, Any]:
 
 def analyze_photo(path: Path) -> dict[str, Any]:
     """Analyze one photo, preferring configured/local AI and falling back locally."""
-    image_b64 = _image_b64(path)
     provider = _provider()
     if provider == "disabled":
         result = _technical_fallback(path)
         result["vision_provider"] = "disabled"
         return result
 
+    image_b64 = _image_b64(path)
     providers = [provider] if provider in {"ollama", "openai", "openai_compatible"} else ["ollama", "openai"]
     errors: list[str] = []
     for selected in providers:
