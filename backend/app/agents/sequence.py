@@ -1,18 +1,17 @@
 """Agente 2a: Sequence.
 
-Assegna una durata dinamica alle foto in base alla rilevanza visiva:
-complessità, dettaglio, contrasto, nitidezza, volti e score compositivo.
-Le foto ordinarie durano circa 3–5s; quelle dense/importanti possono arrivare
-fino a 8s. L'ordine manuale non viene mai modificato.
+Stima una durata cinematografica per ogni foto usando i segnali visivi
+calcolati da Intake: composizione, dettaglio, contrasto, nitidezza, colore
+e presenza di persone. Il vincolo è sempre 2.5–5.5s.
+L'ordine manuale non viene mai modificato.
 """
 from __future__ import annotations
 
 import math
 from typing import Any
 
-PHOTO_BASE_MIN_SEC = 3.0
-PHOTO_BASE_MAX_SEC = 8.0
-PHOTO_MAX_SEC = PHOTO_BASE_MAX_SEC
+PHOTO_MIN_SEC = 2.5
+PHOTO_MAX_SEC = 5.5
 MAX_VIDEO_SEC = 8.0
 
 
@@ -20,17 +19,30 @@ def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
-def _photo_visual_score(item: dict[str, Any]) -> float:
-    """Combina i segnali visivi prodotti da Intake in uno score 0–1."""
-    composition = _clamp01(float(item.get("composition_score") or 0.5))
-    detail = _clamp01(float(item.get("detail_score") or composition))
-    contrast = _clamp01(float(item.get("contrast_score") or 0.5))
-    sharpness = _clamp01(float(item.get("sharpness_score") or 0.5))
-    color = _clamp01(float(item.get("color_score") or 0.5))
-    faces = max(0, int(item.get("face_count") or 0))
-    face_score = _clamp01(math.log1p(faces) / math.log(9.0))
+def _safe_float(item: dict[str, Any], key: str, default: float) -> float:
+    try:
+        value = float(item.get(key) if item.get(key) is not None else default)
+    except (TypeError, ValueError):
+        value = default
+    return _clamp01(value)
 
-    return _clamp01(
+
+def _photo_visual_score(item: dict[str, Any]) -> float:
+    """Score 0–1 della quantità di informazione visiva da mostrare."""
+    composition = _safe_float(item, "composition_score", 0.50)
+    detail = _safe_float(item, "detail_score", composition)
+    contrast = _safe_float(item, "contrast_score", 0.50)
+    sharpness = _safe_float(item, "sharpness_score", 0.50)
+    color = _safe_float(item, "color_score", 0.50)
+
+    try:
+        faces = max(0, int(item.get("face_count") or 0))
+    except (TypeError, ValueError):
+        faces = 0
+    # 1–4 volti danno un incremento utile senza dominare gli altri segnali.
+    face_score = _clamp01(math.log1p(faces) / math.log(5.0))
+
+    score = (
         0.28 * composition
         + 0.24 * detail
         + 0.16 * sharpness
@@ -38,23 +50,27 @@ def _photo_visual_score(item: dict[str, Any]) -> float:
         + 0.08 * color
         + 0.12 * face_score
     )
+    return _clamp01(score)
 
 
 def photo_duration(item: dict[str, Any]) -> float:
-    """Durata cinematografica adattiva 3–8s."""
+    """Durata adattiva sempre compresa tra 2.5 e 5.5 secondi."""
     score = _photo_visual_score(item)
-    # Curva non lineare: evita che tutte le foto si concentrino vicino al valore
-    # medio e riserva 7–8s alle immagini davvero ricche/importanti.
-    duration = PHOTO_BASE_MIN_SEC + (PHOTO_BASE_MAX_SEC - PHOTO_BASE_MIN_SEC) * (score ** 0.72)
+
+    # Curva morbida: foto semplici ~2.8–3.4s, normali ~3.5–4.3s,
+    # immagini ricche/importanti ~4.4–5.5s.
+    duration = PHOTO_MIN_SEC + (PHOTO_MAX_SEC - PHOTO_MIN_SEC) * (score ** 0.78)
 
     faces = max(0, int(item.get("face_count") or 0))
-    detail = _clamp01(float(item.get("detail_score") or 0.0))
     if faces >= 2:
-        duration += min(0.8, 0.2 * faces)
-    if detail >= 0.82:
-        duration += 0.45
+        duration += min(0.45, 0.10 * (faces - 1))
 
-    return round(_clamp01((duration - PHOTO_BASE_MIN_SEC) / (PHOTO_BASE_MAX_SEC - PHOTO_BASE_MIN_SEC)) * (PHOTO_BASE_MAX_SEC - PHOTO_BASE_MIN_SEC) + PHOTO_BASE_MIN_SEC, 2)
+    if _safe_float(item, "detail_score", 0.50) >= 0.82:
+        duration += 0.25
+    if _safe_float(item, "composition_score", 0.50) >= 0.85:
+        duration += 0.25
+
+    return round(max(PHOTO_MIN_SEC, min(PHOTO_MAX_SEC, duration)), 2)
 
 
 async def run(project_state: dict) -> dict:
