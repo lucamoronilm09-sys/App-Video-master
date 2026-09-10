@@ -8,6 +8,7 @@ interface TimelineProps {
   media: MediaItem[];
   onReorder: (mediaIds: string[]) => Promise<void>;
   onToggleFill: (mediaId: string, fill: BackgroundFill) => Promise<void>;
+  onDelete: (mediaId: string) => Promise<void>;
   busy?: boolean;
 }
 
@@ -45,7 +46,7 @@ function SourceFpsBadge({ m }: { m: MediaItem }) {
 /** Striscia orizzontale ordinabile: l'ordine visivo = order_index (RF2).
  * Drag&drop nativo HTML5 + frecce ◀ ▶ come fallback (mobile/tastiera).
  * Touch support: long-press (500ms) + swipe per riordinare su mobile. */
-export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: TimelineProps) {
+export function Timeline({ projectId, media, onReorder, onToggleFill, onDelete, busy }: TimelineProps) {
   const sorted = useMemo(
     () => [...media].sort((a, b) => a.order_index - b.order_index),
     [media],
@@ -53,12 +54,13 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: Ti
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const dragRef = useRef<string | null>(null);
   
   // Touch reordering states
   const [touchDragId, setTouchDragId] = useState<string | null>(null);
   const [touchDragIndex, setTouchDragIndex] = useState<number>(-1);
-  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStartX = useRef<number>(0);
 
   if (sorted.length === 0) return null;
@@ -87,6 +89,22 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: Ti
       await onReorder(ids);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Riordino fallito");
+    }
+  };
+
+  const handleDelete = async (m: MediaItem) => {
+    if (deletingId || busy) return;
+    const label = m.type === "photo" ? "foto" : "video";
+    const confirmed = window.confirm(`Eliminare definitivamente questo ${label} dal progetto?\n\nIl file verrà rimosso e il montaggio corrente dovrà essere rigenerato.`);
+    if (!confirmed) return;
+    setError(null);
+    setDeletingId(m.id);
+    try {
+      await onDelete(m.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Eliminazione fallita");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -176,17 +194,18 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: Ti
       )}
 
       <ol
-        className={`flex gap-3 overflow-x-auto pb-3 ${busy ? "pointer-events-none opacity-60" : ""}`}
+        className={`flex gap-3 overflow-x-auto pb-3 ${busy || deletingId ? "pointer-events-none opacity-60" : ""}`}
         aria-label="Timeline clip"
       >
         {sorted.map((m, i) => {
           const isDragged = dragId === m.id;
           const isOver = overId === m.id;
           const isTouchDragging = touchDragId === m.id;
+          const isDeleting = deletingId === m.id;
           return (
             <li
               key={m.id}
-              draggable={!busy && !isTouchDragging}
+              draggable={!busy && !deletingId && !isTouchDragging}
               onDragStart={e => handleDragStart(e, m.id)}
               onDragOver={e => handleDragOver(e, m.id)}
               onDrop={e => void handleDrop(e, m.id)}
@@ -203,14 +222,10 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: Ti
                 ${isTouchDragging ? " scale-110 shadow-2xl opacity-80 z-20 bg-gray-800" : ""}
               `}
             >
-              {/* numero d'ordine */}
               <span className="absolute left-1.5 top-1.5 z-10 rounded bg-black/70 px-1.5 py-0.5 text-xs font-bold text-white">
                 {i + 1}
               </span>
 
-              {/* anteprima 16:9 che rispecchia il fit del Normalizer:
-                  cover → riempie (object-cover), contain → intera centrata.
-                  Thumbnail leggere dal backend (niente originali pesanti). */}
               <div className="aspect-video w-full bg-slate-900">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
@@ -227,7 +242,6 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: Ti
                 </span>
               )}
 
-              {/* metadati + badge fit + durata/trim (Sequence M3) */}
               <div className="space-y-1 bg-slate-800/90 p-2 text-[11px] leading-tight text-slate-300">
                 <div className="flex items-center justify-between gap-1">
                   <span className="truncate">{m.orientation}</span>
@@ -248,7 +262,7 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: Ti
                   {m.fit_mode === "contain" && (
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || !!deletingId}
                       onClick={() => void onToggleFill(m.id, m.background_fill === "blur" ? "solid_color" : "blur")}
                       title="Sfondo laterale: blur o tinta unita"
                       className="rounded bg-slate-700 px-1 py-0.5 text-[10px] text-slate-300 hover:bg-slate-600 disabled:opacity-50"
@@ -260,7 +274,7 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: Ti
                 <div className="flex items-center justify-between pt-0.5">
                   <button
                     type="button"
-                    disabled={busy || i === 0}
+                    disabled={busy || !!deletingId || i === 0}
                     onClick={() => void shift(m.id, -1)}
                     aria-label={`Sposta clip ${i + 1} a sinistra`}
                     className="rounded px-1.5 py-0.5 text-slate-400 hover:bg-slate-700 hover:text-white disabled:opacity-30"
@@ -269,12 +283,22 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: Ti
                   </button>
                   <button
                     type="button"
-                    disabled={busy || i === sorted.length - 1}
+                    disabled={busy || !!deletingId || i === sorted.length - 1}
                     onClick={() => void shift(m.id, 1)}
                     aria-label={`Sposta clip ${i + 1} a destra`}
                     className="rounded px-1.5 py-0.5 text-slate-400 hover:bg-slate-700 hover:text-white disabled:opacity-30"
                   >
                     ▶
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || !!deletingId}
+                    onClick={() => void handleDelete(m)}
+                    aria-label={`Elimina clip ${i + 1}`}
+                    title="Elimina caricamento"
+                    className="rounded px-1.5 py-0.5 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 disabled:opacity-30"
+                  >
+                    {isDeleting ? "…" : "🗑"}
                   </button>
                 </div>
               </div>
