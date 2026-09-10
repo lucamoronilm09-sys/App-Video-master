@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.api.drive import router as drive_router
+from app.api.media_routes import router as media_router
 from app.config import PROJECTS_DIR
 from app.jobs import manager as jobs
 
@@ -63,3 +64,4 @@ app.add_middleware(
 
 app.include_router(router, prefix="/api")
 app.include_router(drive_router, prefix="/api")
+app.include_router(media_router, prefix="/api")
