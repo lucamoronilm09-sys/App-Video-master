@@ -11,17 +11,25 @@ class VisionAnalysis(BaseModel):
     vision_provider: Optional[str] = None
     vision_error: Optional[str] = None
     importance: float = 0.5
+    story_value: float = 0.5
     emotional_intensity: float = 0.5
     subject_clarity: float = 0.5
     visual_interest: float = 0.5
+    visual_quality: float = 0.5
+    composition_balance: float = 0.5
+    attention_score: float = 0.5
     people_count: int = 0
+    faces_clear: float = 0.5
     is_group_photo: bool = False
     is_portrait: bool = False
     is_landscape: bool = False
     is_action: bool = False
     is_closeup: bool = False
     scene_type: str = "unknown"
+    attention_center: str = "unknown"
+    recommended_focus: str = "scene"
     recommended_pacing: str = "normal"
+    repetition_risk: float = 0.25
 
 
 class MediaItem(BaseModel):
