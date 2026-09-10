@@ -98,13 +98,18 @@ class ProjectState(BaseModel):
     schema_version: int
     project_id: str
     name: str = "Nuovo progetto"
+    user_prompt: str = ""
     media: list[MediaItem] = Field(default_factory=list)
     audio: AudioBlock = Field(default_factory=AudioBlock)
     audio_tracks: list[AudioTrack] = Field(default_factory=list)
     style_profile: str = "album_memory"
     output_spec: OutputSpec = Field(default_factory=OutputSpec)
     edit_decision_list: list[dict[str, Any]] = Field(default_factory=list)
+    story_chapters: list[dict[str, Any]] = Field(default_factory=list)
+    music_structure: dict[str, Any] = Field(default_factory=dict)
     clip_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    ai_feedback: Optional[dict[str, Any]] = None
+    ai_feedback_history: list[dict[str, Any]] = Field(default_factory=list)
     render_manifest: Optional[dict[str, Any]] = None
     qa_report: Optional[dict[str, Any]] = None
     errors: list[dict[str, Any]] = Field(default_factory=list)
@@ -135,7 +140,15 @@ class UpdateSettingsRequest(BaseModel):
 
 
 class UpdateProjectRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=120)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    user_prompt: Optional[str] = Field(default=None, max_length=2000)
+    style_profile: Optional[str] = Field(default=None, max_length=60)
+
+
+class ProjectFeedbackRequest(BaseModel):
+    rating: Literal["up", "down"]
+    reasons: list[str] = Field(default_factory=list, max_length=8)
+    note: str = Field(default="", max_length=1000)
 
 
 class DriveCredentialsRequest(BaseModel):
