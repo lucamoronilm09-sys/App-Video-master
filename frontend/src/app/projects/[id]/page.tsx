@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { clearErrors, duplicateProject, getProject, patchClipOverride, planEdit, reorderMedia, resetClipOverride, submitDriveImportJob, submitFeedback, submitRenderJob, updateMediaFill, updateProject, updateSettings, uploadAudio, type BackgroundFill, type ClipOverride, type Job, type ProjectState, type SettingsPatch } from "@/lib/api";
-import { deleteMedia } from "@/lib/mediaApi";
+import { deleteMedia, replaceMedia } from "@/lib/mediaApi";
 import { useProjectEvents } from "@/hooks/useProjectEvents";
 import { UploadZone } from "@/components/UploadZone";
 import { DriveSection } from "@/components/DriveSection";
@@ -29,6 +29,7 @@ export default function ProjectPage() {
   const handleUploadComplete = useCallback(async () => { try { setProject(await getProject(projectId)); } catch {} }, [projectId]);
   const handleReorder = useCallback(async (mediaIds: string[]) => { const prev = project; if (!prev) return; const byId = new Map(prev.media.map(m => [m.id, m])); setProject({ ...prev, media: mediaIds.map((id, i) => ({ ...byId.get(id)!, order_index: i })) }); setTimelineBusy(true); try { setProject(await reorderMedia(projectId, mediaIds)); } catch (err) { setProject(prev); throw err; } finally { setTimelineBusy(false); } }, [project, projectId]);
   const handleDeleteMedia = useCallback(async (mediaId: string) => { setDeleteBusy(true); try { setProject(await deleteMedia(projectId, mediaId)); } catch (err) { setError(err instanceof Error ? err.message : "Eliminazione fallita"); throw err; } finally { setDeleteBusy(false); } }, [projectId]);
+  const handleReplaceMedia = useCallback(async (mediaId: string, file: File) => { setTimelineBusy(true); try { setProject(await replaceMedia(projectId, mediaId, file)); } catch (err) { setError(err instanceof Error ? err.message : "Sostituzione fallita"); throw err; } finally { setTimelineBusy(false); } }, [projectId]);
   const handleToggleFill = useCallback(async (mediaId: string, fill: BackgroundFill) => { setTimelineBusy(true); try { setProject(await updateMediaFill(projectId, mediaId, fill)); } finally { setTimelineBusy(false); } }, [projectId]);
   const handleSettings = useCallback(async (patch: SettingsPatch) => { setSettingsBusy(true); try { setProject(await updateSettings(projectId, patch)); } catch (err) { setError(err instanceof Error ? err.message : "Salvataggio impostazioni fallito"); } finally { setSettingsBusy(false); } }, [projectId]);
   const handleAudioUpload = useCallback(async (file: File) => { setAudioBusy(true); try { setProject(await uploadAudio(projectId, file)); } finally { setAudioBusy(false); } }, [projectId]);
@@ -56,7 +57,7 @@ export default function ProjectPage() {
       {project && <section className="surface rounded-3xl p-5"><AIDirectorPanel project={project} onSave={saveProjectMeta} busy={projectBusy} /></section>}
       <section className="surface rounded-3xl p-5 sm:p-6"><div className="mb-4 flex items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">01 · Media library</p><h2 className="mt-1 text-xl font-bold text-white">Aggiungi contenuti</h2></div><span className="text-xs text-slate-500">Foto e video · max 500 MB</span></div>{project && <UploadZone projectId={projectId} onUploadComplete={handleUploadComplete} />}</section>
       {project && <section className="surface rounded-3xl p-5"><DriveSection projectId={projectId} onSubmitImport={handleSubmitDriveImport} job={lastJob("drive_import")} /></section>}
-      {project && <section className="surface rounded-3xl p-5 sm:p-6"><Timeline projectId={projectId} media={project.media} onReorder={handleReorder} onToggleFill={handleToggleFill} onDelete={handleDeleteMedia} busy={timelineBusy || deleteBusy} /></section>}
+      {project && <section className="surface rounded-3xl p-5 sm:p-6"><Timeline projectId={projectId} media={project.media} onReorder={handleReorder} onToggleFill={handleToggleFill} onDelete={handleDeleteMedia} onReplace={handleReplaceMedia} busy={timelineBusy || deleteBusy} /></section>}
       {project && <section className="surface rounded-3xl p-5"><AudioSection audio={project.audio} tracks={project.audio_tracks ?? []} onUpload={handleAudioUpload} busy={audioBusy} /></section>}
       {project && <section className="surface rounded-3xl p-5"><ProjectSettings spec={project.output_spec} onSave={handleSettings} busy={settingsBusy} media={project.media} /></section>}
       {project && <section className="surface rounded-3xl p-5"><MontageSection project={project} onGenerate={handleGenerateEdit} onPatchClip={handlePatchClip} onResetClip={handleResetClip} busy={editBusy} /></section>}
