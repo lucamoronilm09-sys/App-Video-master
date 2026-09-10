@@ -8,6 +8,7 @@ import {
   updateSettings, uploadAudio, type BackgroundFill, type ClipOverride,
   type Job, type ProjectState, type SettingsPatch,
 } from "@/lib/api";
+import { deleteMedia } from "@/lib/mediaApi";
 import { useProjectEvents } from "@/hooks/useProjectEvents";
 import { UploadZone } from "@/components/UploadZone";
 import { DriveSection } from "@/components/DriveSection";
@@ -30,6 +31,7 @@ export default function ProjectPage() {
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [audioBusy, setAudioBusy] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const [clearBusy, setClearBusy] = useState(false);
   const progress = useProjectEvents(projectId);
   const lastSyncRef = useRef(0);
@@ -67,6 +69,19 @@ export default function ProjectPage() {
     catch (err) { setProject(prev); throw err; }
     finally { setTimelineBusy(false); }
   }, [project, projectId]);
+
+  const handleDeleteMedia = useCallback(async (mediaId: string) => {
+    setDeleteBusy(true);
+    try {
+      setProject(await deleteMedia(projectId, mediaId));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Eliminazione del caricamento fallita";
+      setError(message);
+      throw err;
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [projectId]);
 
   const handleToggleFill = useCallback(async (mediaId: string, fill: BackgroundFill) => {
     setTimelineBusy(true);
@@ -179,7 +194,7 @@ export default function ProjectPage() {
           {project && <section className="surface rounded-3xl p-5"><DriveSection projectId={projectId} onSubmitImport={handleSubmitDriveImport} job={lastJob("drive_import")} /></section>}
 
           {/* 03 — Ordine delle clip */}
-          {project && <section className="surface rounded-3xl p-5 sm:p-6"><Timeline projectId={projectId} media={project.media} onReorder={handleReorder} onToggleFill={handleToggleFill} busy={timelineBusy} /></section>}
+          {project && <section className="surface rounded-3xl p-5 sm:p-6"><Timeline projectId={projectId} media={project.media} onReorder={handleReorder} onToggleFill={handleToggleFill} onDelete={handleDeleteMedia} busy={timelineBusy || deleteBusy} /></section>}
 
           {/* 04 — Musica */}
           {project && <section className="surface rounded-3xl p-5"><AudioSection audio={project.audio} tracks={project.audio_tracks ?? []} onUpload={handleAudioUpload} busy={audioBusy} /></section>}
