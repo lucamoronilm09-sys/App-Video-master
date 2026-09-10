@@ -1,8 +1,8 @@
-"""Agente 0: Intake (architettura sez. 5).
+"""Agente 0: Intake.
 
-Valida i file, estrae metadata (width, height, duration, orientation, type)
-in parallelo con ffprobe (video) e Pillow (immagini). Errori per-file vanno in
-state["errors"] (non bloccanti); i file validi popolano state["media"].
+Valida i file ed estrae metadata. Per le foto calcola anche segnali tecnici
+reali (volti, composizione, dettaglio, nitidezza, contrasto e interesse colore)
+che il Vision Analyzer può integrare nel punteggio editoriale.
 """
 from __future__ import annotations
 
@@ -11,8 +11,7 @@ import math
 import uuid
 from pathlib import Path
 
-from PIL import Image, ImageOps
-from PIL import ImageStat
+from PIL import Image, ImageOps, ImageStat
 
 try:
     import cv2
@@ -22,77 +21,58 @@ except ImportError:
 from app.services.media_inspect import inspect_media
 
 
-def _photo_content_features(path: Path) -> tuple[int, float, float]:
-    """Stima volti, complessità visiva e dettaglio su una copia ridotta della foto.
-
-    Se OpenCV non è disponibile, usa un fallback Pillow-only invece del valore
-    fisso 0.5: in questo modo le foto non ricevono tutte la stessa durata.
-    
-    Ritorna: (face_count, composition_score, detail_score)
-    """
+def _photo_content_features(path: Path) -> tuple[int, float, float, float, float, float]:
+    """Return face_count, composition, detail, sharpness, contrast, color."""
     try:
         with Image.open(path) as im:
             im = ImageOps.exif_transpose(im).convert("RGB")
             im.thumbnail((1000, 1000))
+            gray_pil = ImageOps.grayscale(im)
+            stats = ImageStat.Stat(gray_pil)
+            contrast = max(0.0, min(1.0, stats.stddev[0] / 75.0))
+            rgb_mean = ImageStat.Stat(im).mean
+            colorfulness = max(0.0, min(1.0, (max(rgb_mean) - min(rgb_mean)) / 90.0))
 
             if cv2 is not None:
                 import numpy as np
-                gray = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2GRAY)
+                rgb = np.array(im)
+                gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
                 edges = cv2.Canny(gray, 80, 160)
                 edge_density = float((edges > 0).mean())
                 hist = cv2.calcHist([gray], [0], None, [64], [0, 256])
                 cv2.normalize(hist, hist)
                 vals = hist[hist > 0]
                 entropy = float(-(vals * np.log2(vals)).sum())
-                cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-                faces = cascade.detectMultiScale(
-                    gray, scaleFactor=1.12, minNeighbors=5, minSize=(32, 32)
-                ) if not cascade.empty() else []
-                complexity = max(
-                    0.0,
-                    min(1.0, 0.55 * (entropy / 6.0) + 0.45 * min(1.0, edge_density * 5.0)),
-                )
-                # detail_score basato sulla densità dei bordi e entropia locale
-                laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-                detail_variance = laplacian.var()
-                detail_score = max(0.0, min(1.0, math.sqrt(detail_variance) / 50.0))
-                return int(len(faces)), round(complexity, 3), round(detail_score, 3)
+                complexity = max(0.0, min(1.0, 0.55 * (entropy / 6.0) + 0.45 * min(1.0, edge_density * 5.0)))
 
-            # Fallback robusto senza OpenCV: entropia dell'istogramma + varianza.
-            gray = ImageOps.grayscale(im)
-            hist = gray.histogram()
-            total = sum(hist) or 1
-            entropy = -sum((n / total) * math.log2(n / total) for n in hist if n)
-            variance = ImageStat.Stat(gray).var[0]
-            variance_score = min(1.0, math.sqrt(max(0.0, variance)) / 80.0)
-            entropy_score = min(1.0, entropy / 7.5)
-            complexity = max(0.0, min(1.0, 0.65 * entropy_score + 0.35 * variance_score))
-            
-            # detail_score dal contrasto locale (differenza pixel adiacenti)
-            pixels = list(gray.getdata())
-            width = gray.width
-            local_contrasts = []
-            for y in range(min(gray.height - 1, 50)):
-                for x in range(min(width - 1, 50)):
-                    idx = y * width + x
-                    p1 = pixels[idx]
-                    p2 = pixels[idx + 1]
-                    p3 = pixels[idx + width]
-                    local_contrasts.append(abs(p2 - p1))
-                    local_contrasts.append(abs(p3 - p1))
-            avg_contrast = sum(local_contrasts) / len(local_contrasts) if local_contrasts else 0
-            detail_score = min(1.0, avg_contrast / 60.0)
-            return 0, round(complexity, 3), round(detail_score, 3)
+                laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+                sharpness = max(0.0, min(1.0, math.sqrt(max(0.0, float(laplacian.var()))) / 45.0))
+                detail = max(0.0, min(1.0, 0.55 * sharpness + 0.45 * min(1.0, edge_density * 5.0)))
+
+                cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+                faces = cascade.detectMultiScale(gray, scaleFactor=1.12, minNeighbors=5, minSize=(32, 32)) if not cascade.empty() else []
+                return (
+                    int(len(faces)), round(complexity, 3), round(detail, 3),
+                    round(sharpness, 3), round(contrast, 3), round(colorfulness, 3),
+                )
+
+            # Pillow-only fallback.
+            variance = max(0.0, float(stats.var[0]))
+            sharpness = min(1.0, math.sqrt(variance) / 80.0)
+            detail = max(0.0, min(1.0, 0.65 * contrast + 0.35 * sharpness))
+            complexity = max(0.0, min(1.0, 0.65 * contrast + 0.35 * detail))
+            return 0, round(complexity, 3), round(detail, 3), round(sharpness, 3), round(contrast, 3), round(colorfulness, 3)
     except Exception:
-        return 0, 0.5, 0.5
+        return 0, 0.5, 0.5, 0.5, 0.5, 0.5
 
 
 async def _process_one(path: Path, source: str, drive_file_id: str | None) -> dict | None:
     try:
         meta = await inspect_media(path)
-        face_count, composition_score, detail_score = (0, 0.5, 0.5)
+        face_count, composition, detail, sharpness, contrast, color = (0, 0.5, 0.5, 0.5, 0.5, 0.5)
         if meta["type"] == "photo":
-            face_count, composition_score, detail_score = await asyncio.to_thread(_photo_content_features, path)
+            values = await asyncio.to_thread(_photo_content_features, path)
+            face_count, composition, detail, sharpness, contrast, color = values
         return {
             "id": uuid.uuid4().hex[:12],
             "source": source,
@@ -105,8 +85,11 @@ async def _process_one(path: Path, source: str, drive_file_id: str | None) -> di
             "duration_sec": meta["duration_sec"],
             "source_fps": meta.get("source_fps"),
             "face_count": face_count,
-            "composition_score": composition_score,
-            "detail_score": detail_score,
+            "composition_score": composition,
+            "detail_score": detail,
+            "sharpness_score": sharpness,
+            "contrast_score": contrast,
+            "color_score": color,
             "order_index": 0,
         }
     except Exception as exc:
@@ -114,31 +97,25 @@ async def _process_one(path: Path, source: str, drive_file_id: str | None) -> di
 
 
 async def run(project_state: dict) -> dict:
-    """Legge project_state["media_staging"] (lista di dict {path, source, drive_file_id?}),
-    processa in parallelo, aggiorna media[] e errors[]."""
     staging = project_state.get("media_staging", [])
     if not staging:
         return project_state
-
     tasks = [
         _process_one(Path(item["path"]), item.get("source", "local"), item.get("drive_file_id"))
         for item in staging
     ]
     results = await asyncio.gather(*tasks)
-
-    new_media = []
+    new_media: list[dict] = []
     new_errors = list(project_state.get("errors", []))
     current_count = len(project_state.get("media", []))
-
-    for r in results:
-        if r is None:
+    for result in results:
+        if result is None:
             continue
-        if "error" in r:
-            new_errors.append(r["error"])
+        if "error" in result:
+            new_errors.append(result["error"])
         else:
-            r["order_index"] = current_count + len(new_media)
-            new_media.append(r)
-
+            result["order_index"] = current_count + len(new_media)
+            new_media.append(result)
     project_state["media"].extend(new_media)
     project_state["errors"] = new_errors
     project_state["media_staging"] = []
