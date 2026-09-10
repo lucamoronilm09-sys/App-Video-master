@@ -13,7 +13,7 @@ from app.pipeline import state as state_store
 TRANS_MANUAL_MAX_SEC = 1.5
 ZOOM_MAX = 1.15
 PAN_MAX_FRAC = 0.12
-MANIFEST_VERSION = 4
+MANIFEST_VERSION = 5
 VCODEC_MAP = {"h264": "libx264", "h265": "libx265"}
 CRF_MAP = {"h264": 18, "h265": 20}
 ENCODE_PRESET = "medium"
@@ -148,10 +148,6 @@ async def run(project_state: dict) -> dict:
             m_w = max(1, int(media.get("width") or w))
             m_h = max(1, int(media.get("height") or h))
             portrait = (media.get("orientation") == "portrait") or m_h > m_w
-            # IMPORTANT: zoompan must receive exactly ONE source frame.
-            # The old graph fed it an infinite `-loop 1` stream, so d=frames
-            # was multiplied for every source frame and could keep FFmpeg at 99%
-            # for an effectively unbounded render.
             if portrait:
                 fw2 = _even(round(2 * h * m_w / m_h))
                 fw1 = _even(round(h * m_w / m_h))
@@ -250,6 +246,9 @@ async def run(project_state: dict) -> dict:
         audio_block = {"tracks": [{"path": t.get("path"), "name": t.get("name"), "duration_sec": t.get("duration_sec", 0)} for t in tracks]}
 
     script = ";\n".join(filters)
+    script_path = state_store.output_dir(project_state["project_id"]) / "filter_complex.txt"
+    script_path.write_text(script, encoding="utf-8")
+
     out_path = str(state_store.output_dir(project_state["project_id"]) / "final.mp4")
     args: list[str] = ["ffmpeg", "-y", "-sws_flags", SWS_FLAGS]
     for inp in inputs:
@@ -259,7 +258,7 @@ async def run(project_state: dict) -> dict:
             args += ["-loop", "1", "-framerate", str(fps), "-i", inp["path"]]
         else:
             args += ["-i", inp["path"]]
-    args += ["-filter_complex", script, "-map", "[vout]"]
+    args += ["-filter_complex_script", str(script_path), "-map", "[vout]"]
     if audio_block:
         args += ["-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]
     args += ["-c:v", VCODEC_MAP[vcodec], "-preset", ENCODE_PRESET, "-crf", str(CRF_MAP[vcodec]),
@@ -276,6 +275,7 @@ async def run(project_state: dict) -> dict:
         "segments": segments,
         "transitions": transitions,
         "filter_complex": script,
+        "filter_complex_script": str(script_path),
         "args": args,
         "total_sec": total,
         "audio": audio_block,
