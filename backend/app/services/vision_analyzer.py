@@ -1,12 +1,11 @@
 """Vision analysis for photo-aware video editing.
 
-The service is intentionally provider-agnostic:
-- Ollama is tried automatically when available and exposes a vision model.
-- An OpenAI-compatible endpoint can be configured through environment variables.
-- If no vision model is available, a deterministic Pillow/OpenCV fallback is used.
+Providers:
+- Ollama: automatic local discovery of a vision-capable model.
+- OpenAI-compatible HTTP endpoint: configurable via environment variables.
+- Local Pillow/OpenCV fallback when no Vision model is available.
 
-The returned profile is consumed by the Edit Director to decide photo duration,
-beat placement and editing intensity.
+Set VISION_PROVIDER=disabled to force the local fallback (useful for tests).
 """
 from __future__ import annotations
 
@@ -16,6 +15,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -26,16 +26,8 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     cv2 = None
 
-
-VISION_TIMEOUT_SEC = float(os.getenv("VISION_TIMEOUT_SEC", "45"))
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-VISION_PROVIDER = os.getenv("VISION_PROVIDER", "auto").lower()
-VISION_BASE_URL = os.getenv("VISION_BASE_URL", "").rstrip("/")
-VISION_API_KEY = os.getenv("VISION_API_KEY", "")
-VISION_MODEL = os.getenv("VISION_MODEL", "").strip()
-
 PROMPT = """Analyze this photo for an automatic memory-video editor.
-Return ONLY valid JSON with these numeric fields in [0,1] and boolean/string fields:
+Return ONLY valid JSON with these fields:
 {
   "importance": 0.0,
   "emotional_intensity": 0.0,
@@ -50,15 +42,42 @@ Return ONLY valid JSON with these numeric fields in [0,1] and boolean/string fie
   "scene_type": "unknown",
   "recommended_pacing": "normal"
 }
-Judge the photograph itself, not image quality alone. Importance means how much
-screen time a human editor would likely give it in a personal memory montage.
-More people can increase importance when faces are clearly visible, but do not
-reward a crowded image automatically. Use recommended_pacing = fast, normal,
-slow, or hold. Do not include markdown or explanations."""
+All four scores must be between 0 and 1. Judge the photograph itself, not image
+quality alone. Importance means how much screen time a human editor would likely
+give it in a personal memory montage. More people can increase importance when
+faces are clearly visible, but do not reward a crowded image automatically.
+Use recommended_pacing = fast, normal, slow, or hold. No markdown or explanation."""
 
 
 class VisionError(RuntimeError):
     """Raised when an external vision provider cannot be used."""
+
+
+def _timeout() -> float:
+    try:
+        return max(1.0, float(os.getenv("VISION_TIMEOUT_SEC", "45")))
+    except ValueError:
+        return 45.0
+
+
+def _ollama_url() -> str:
+    return os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+
+
+def _provider() -> str:
+    return os.getenv("VISION_PROVIDER", "auto").lower().strip()
+
+
+def _base_url() -> str:
+    return os.getenv("VISION_BASE_URL", "").rstrip("/")
+
+
+def _api_key() -> str:
+    return os.getenv("VISION_API_KEY", "")
+
+
+def _configured_model() -> str:
+    return os.getenv("VISION_MODEL", "").strip()
 
 
 def _clamp01(value: Any, default: float = 0.5) -> float:
@@ -81,9 +100,8 @@ def _extract_json(text: str) -> dict[str, Any]:
 
 
 def _normalize_profile(data: dict[str, Any]) -> dict[str, Any]:
-    people = data.get("people_count", data.get("face_count", 0))
     try:
-        people = max(0, min(20, int(people)))
+        people = max(0, min(20, int(data.get("people_count", data.get("face_count", 0)))))
     except (TypeError, ValueError):
         people = 0
     pacing = str(data.get("recommended_pacing", "normal")).lower()
@@ -106,16 +124,11 @@ def _normalize_profile(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:
+def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None, timeout: float | None = None) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json", **(headers or {})},
-        method="POST",
-    )
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", **(headers or {})}, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=VISION_TIMEOUT_SEC) as response:
+        with urllib.request.urlopen(req, timeout=timeout or _timeout()) as response:
             raw = response.read().decode("utf-8", errors="replace")
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise VisionError(str(exc)) from exc
@@ -132,27 +145,25 @@ def _image_b64(path: Path) -> str:
     with Image.open(path) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
         im.thumbnail((1280, 1280))
-        # JPEG ridotto: velocizza sensibilmente l'analisi e limita il payload.
-        from io import BytesIO
         buf = BytesIO()
         im.save(buf, format="JPEG", quality=82, optimize=True)
         return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def _ollama_model() -> str | None:
-    if VISION_MODEL:
-        return VISION_MODEL
+    configured = _configured_model()
+    if configured:
+        return configured
+    req = urllib.request.Request(f"{_ollama_url()}/api/tags", method="GET")
     try:
-        req = urllib.request.Request(f"{OLLAMA_URL}/api/tags", method="GET")
-        with urllib.request.urlopen(req, timeout=3) as response:
+        with urllib.request.urlopen(req, timeout=2.0) as response:
             data = json.loads(response.read().decode("utf-8", errors="replace"))
     except Exception:
         return None
     models = [str(m.get("name", "")) for m in data.get("models", []) if isinstance(m, dict)]
-    vision_tokens = ("vl", "vision", "llava", "gemma3", "minicpm", "qwen2-vl", "qwen2.5vl", "qwen3-vl")
+    tokens = ("vl", "vision", "llava", "gemma3", "minicpm", "qwen2-vl", "qwen2.5vl", "qwen3-vl")
     for model in models:
-        lower = model.lower()
-        if any(token in lower for token in vision_tokens):
+        if any(token in model.lower() for token in tokens):
             return model
     return None
 
@@ -162,45 +173,34 @@ def _analyze_ollama(image_b64: str) -> dict[str, Any]:
     if not model:
         raise VisionError("Nessun modello Vision Ollama disponibile")
     result = _post_json(
-        f"{OLLAMA_URL}/api/chat",
-        {
-            "model": model,
-            "messages": [{"role": "user", "content": PROMPT, "images": [image_b64]}],
-            "stream": False,
-            "format": "json",
-            "options": {"temperature": 0},
-        },
+        f"{_ollama_url()}/api/chat",
+        {"model": model, "messages": [{"role": "user", "content": PROMPT, "images": [image_b64]}], "stream": False, "format": "json", "options": {"temperature": 0}},
     )
     message = result.get("message") or {}
     return _normalize_profile(_extract_json(str(message.get("content", ""))))
 
 
 def _analyze_openai_compatible(image_b64: str) -> dict[str, Any]:
-    if not VISION_BASE_URL or not VISION_MODEL:
+    base = _base_url()
+    model = _configured_model()
+    if not base or not model:
         raise VisionError("VISION_BASE_URL e VISION_MODEL non configurati")
-    url = f"{VISION_BASE_URL}/chat/completions"
-    headers = {"Authorization": f"Bearer {VISION_API_KEY}"} if VISION_API_KEY else {}
     result = _post_json(
-        url,
+        f"{base}/chat/completions",
         {
-            "model": VISION_MODEL,
+            "model": model,
             "temperature": 0,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": PROMPT},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                    ],
-                }
-            ],
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": PROMPT},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            ]}],
         },
-        headers,
+        {"Authorization": f"Bearer {_api_key()}"} if _api_key() else None,
     )
     choices = result.get("choices") or []
     content = ((choices[0] if choices else {}).get("message") or {}).get("content", "")
     if isinstance(content, list):
-        content = " ".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
+        content = " ".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
     return _normalize_profile(_extract_json(str(content)))
 
 
@@ -211,7 +211,8 @@ def _technical_fallback(path: Path) -> dict[str, Any]:
         gray = ImageOps.grayscale(im)
         stat = ImageStat.Stat(gray)
         contrast = max(0.0, min(1.0, stat.stddev[0] / 75.0))
-        color = max(0.0, min(1.0, ImageStat.Stat(im).mean[0] / 255.0))
+        rgb = ImageStat.Stat(im).mean
+        color = max(0.0, min(1.0, (max(rgb) - min(rgb)) / 90.0))
         if cv2 is not None:
             import numpy as np
             arr = np.array(im)
@@ -219,21 +220,21 @@ def _technical_fallback(path: Path) -> dict[str, Any]:
             lap = float(cv2.Laplacian(g, cv2.CV_64F).var())
             sharpness = max(0.0, min(1.0, lap ** 0.5 / 45.0))
             edges = cv2.Canny(g, 80, 160)
-            visual_interest = max(0.0, min(1.0, float((edges > 0).mean()) * 5.0))
+            interest = max(0.0, min(1.0, float((edges > 0).mean()) * 5.0))
             cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
             faces = cascade.detectMultiScale(g, scaleFactor=1.12, minNeighbors=5, minSize=(32, 32)) if not cascade.empty() else []
             people = int(len(faces))
         else:
             sharpness = max(0.0, min(1.0, stat.var[0] ** 0.5 / 80.0))
-            visual_interest = max(0.0, min(1.0, contrast * 0.7 + sharpness * 0.3))
+            interest = max(0.0, min(1.0, contrast * 0.7 + sharpness * 0.3))
             people = 0
-        importance = max(0.0, min(1.0, 0.35 * visual_interest + 0.25 * sharpness + 0.20 * contrast + 0.20 * min(1.0, people / 3.0)))
+        importance = max(0.0, min(1.0, 0.35 * interest + 0.25 * sharpness + 0.15 * contrast + 0.10 * color + 0.15 * min(1.0, people / 3.0)))
         return {
             "ai_used": False,
             "importance": round(importance, 3),
-            "emotional_intensity": round(min(1.0, contrast * 0.7 + visual_interest * 0.3), 3),
+            "emotional_intensity": round(min(1.0, contrast * 0.7 + interest * 0.3), 3),
             "subject_clarity": round((sharpness + contrast) / 2.0, 3),
-            "visual_interest": round(visual_interest, 3),
+            "visual_interest": round(interest, 3),
             "people_count": people,
             "is_group_photo": people >= 2,
             "is_portrait": im.height > im.width,
@@ -246,30 +247,25 @@ def _technical_fallback(path: Path) -> dict[str, Any]:
 
 
 def analyze_photo(path: Path) -> dict[str, Any]:
-    """Return semantic pacing features for one photo."""
+    """Analyze one photo, preferring configured/local AI and falling back locally."""
     image_b64 = _image_b64(path)
+    provider = _provider()
+    if provider == "disabled":
+        result = _technical_fallback(path)
+        result["vision_provider"] = "disabled"
+        return result
+
+    providers = [provider] if provider in {"ollama", "openai", "openai_compatible"} else ["ollama", "openai"]
     errors: list[str] = []
-
-    providers: list[str]
-    if VISION_PROVIDER == "ollama":
-        providers = ["ollama"]
-    elif VISION_PROVIDER in {"openai", "openai_compatible"}:
-        providers = ["openai"]
-    else:
-        providers = ["ollama", "openai"]
-
-    for provider in providers:
+    for selected in providers:
         try:
-            if provider == "ollama":
-                profile = _analyze_ollama(image_b64)
-            else:
-                profile = _analyze_openai_compatible(image_b64)
-            profile["vision_provider"] = provider
-            return profile
+            result = _analyze_ollama(image_b64) if selected == "ollama" else _analyze_openai_compatible(image_b64)
+            result["vision_provider"] = selected
+            return result
         except Exception as exc:
-            errors.append(f"{provider}: {exc}")
+            errors.append(f"{selected}: {exc}")
 
-    fallback = _technical_fallback(path)
-    fallback["vision_provider"] = "fallback"
-    fallback["vision_error"] = " | ".join(errors[-2:]) if errors else None
-    return fallback
+    result = _technical_fallback(path)
+    result["vision_provider"] = "fallback"
+    result["vision_error"] = " | ".join(errors[-2:]) if errors else None
+    return result
