@@ -1,10 +1,27 @@
-"""Schemi Pydantic: Project State come definito dall'architettura (sez. 4),
-piu' campi operativi (errors/pipeline_log) e modelli di request/response."""
+"""Schemi Pydantic: Project State + request/response models."""
 from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+
+class VisionAnalysis(BaseModel):
+    ai_used: bool = False
+    vision_provider: Optional[str] = None
+    vision_error: Optional[str] = None
+    importance: float = 0.5
+    emotional_intensity: float = 0.5
+    subject_clarity: float = 0.5
+    visual_interest: float = 0.5
+    people_count: int = 0
+    is_group_photo: bool = False
+    is_portrait: bool = False
+    is_landscape: bool = False
+    is_action: bool = False
+    is_closeup: bool = False
+    scene_type: str = "unknown"
+    recommended_pacing: str = "normal"
 
 
 class MediaItem(BaseModel):
@@ -20,15 +37,24 @@ class MediaItem(BaseModel):
     order_index: int
     fit_mode: Optional[Literal["cover", "contain"]] = None
     background_fill: Optional[Literal["blur", "solid_color"]] = None
-    # M3 (Sequence Agent): trim centrale per video > 8s; None = nessun trim.
     trim_start_sec: Optional[float] = None
     trim_end_sec: Optional[float] = None
-    # fps nativo rilevato all'import (solo video; None per foto/non rilevabile).
-    # La UI lo usa per consigliare un fps di output senza conversioni a scatti.
     source_fps: Optional[float] = None
     face_count: int = 0
     composition_score: float = 0.5
     detail_score: float = 0.5
+    sharpness_score: float = 0.5
+    contrast_score: float = 0.5
+    color_score: float = 0.5
+    people_count: int = 0
+    importance_score: float = 0.5
+    vision_ai_used: bool = False
+    scene_type: Optional[str] = None
+    duration_source: str = "unknown"
+    ai_duration_sec: Optional[float] = None
+    ai_edit_score: Optional[float] = None
+    music_sync: bool = False
+    vision_analysis: Optional[VisionAnalysis] = None
 
 
 class OutputSpec(BaseModel):
@@ -42,6 +68,8 @@ class AudioBlock(BaseModel):
     path: Optional[str] = None
     duration_sec: float = 0.0
     bpm: float = 0.0
+    beat_times_sec: list[float] = Field(default_factory=list)
+    downbeat_times_sec: list[float] = Field(default_factory=list)
     beat_markers_sec: list[float] = Field(default_factory=list)
     energy_curve: list[float] = Field(default_factory=list)
 
@@ -52,6 +80,8 @@ class AudioTrack(BaseModel):
     path: Optional[str] = None
     duration_sec: float = 0.0
     bpm: float = 0.0
+    beat_times_sec: list[float] = Field(default_factory=list)
+    downbeat_times_sec: list[float] = Field(default_factory=list)
     beat_markers_sec: list[float] = Field(default_factory=list)
     energy_curve: list[float] = Field(default_factory=list)
 
@@ -106,14 +136,6 @@ class DriveImportRequest(BaseModel):
 
 
 class ClipOverrideRequest(BaseModel):
-    """Modifica manuale di una clip del montaggio (ogni campo è opzionale).
-
-    - duration_sec: foto 1.0–12.0s; video 0.5s–durata sorgente (ricentra il trim).
-    - transition_out: dissolvenza verso la clip successiva 0.0 (stacco)–1.5s.
-    - ken_burns_movement: movimento foto (pan_left/pan_right/zoom_in_slow/
-      zoom_out_slow/pan_and_zoom_diag/static) o "auto" per togliere l'override.
-    """
-
     duration_sec: Optional[float] = None
     transition_out: Optional[float] = None
     ken_burns_movement: Optional[str] = None

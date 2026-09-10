@@ -1,86 +1,79 @@
 """Agente 2a: Sequence.
 
-Stima una durata cinematografica per ogni foto usando i segnali visivi
-calcolati da Intake: composizione, dettaglio, contrasto, nitidezza, colore
-e presenza di persone. Il vincolo è sempre 2.5–5.5s.
-L'ordine manuale non viene mai modificato.
+Prepara i media per il montaggio. L'analisi semantica delle foto viene eseguita
+qui perché è indipendente dall'audio; la durata finale viene scelta dall'Edit
+Director dopo che anche l'audio è stato analizzato.
 """
 from __future__ import annotations
 
-import math
+import asyncio
+from pathlib import Path
 from typing import Any
 
-PHOTO_MIN_SEC = 2.5
-PHOTO_MAX_SEC = 5.5
+from app.services.vision_analyzer import analyze_photo
+
 MAX_VIDEO_SEC = 8.0
+PROVISIONAL_PHOTO_SEC = 3.5
 
 
-def _clamp01(value: float) -> float:
-    return max(0.0, min(1.0, value))
+async def _analyze_one_photo(item: dict[str, Any]) -> dict[str, Any]:
+    path = Path(str(item.get("path", "")))
+    if not path.is_file():
+        profile = {
+            "ai_used": False,
+            "vision_provider": "unavailable",
+            "importance": 0.5,
+            "emotional_intensity": 0.5,
+            "subject_clarity": 0.5,
+            "visual_interest": 0.5,
+            "people_count": int(item.get("face_count") or 0),
+            "is_group_photo": bool((item.get("face_count") or 0) >= 2),
+            "recommended_pacing": "normal",
+        }
+    else:
+        try:
+            profile = await asyncio.to_thread(analyze_photo, path)
+        except Exception as exc:
+            profile = {
+                "ai_used": False,
+                "vision_provider": "error",
+                "vision_error": str(exc),
+                "importance": 0.5,
+                "emotional_intensity": 0.5,
+                "subject_clarity": 0.5,
+                "visual_interest": 0.5,
+                "people_count": int(item.get("face_count") or 0),
+                "is_group_photo": bool((item.get("face_count") or 0) >= 2),
+                "recommended_pacing": "normal",
+            }
+    item["vision_analysis"] = profile
+    item["vision_ai_used"] = bool(profile.get("ai_used"))
+    item["scene_type"] = profile.get("scene_type")
+    item["people_count"] = profile.get("people_count", item.get("face_count", 0))
+    item["importance_score"] = profile.get("importance", 0.5)
+    return item
 
 
-def _safe_float(item: dict[str, Any], key: str, default: float) -> float:
-    try:
-        value = float(item.get(key) if item.get(key) is not None else default)
-    except (TypeError, ValueError):
-        value = default
-    return _clamp01(value)
-
-
-def _photo_visual_score(item: dict[str, Any]) -> float:
-    """Score 0–1 della quantità di informazione visiva da mostrare."""
-    composition = _safe_float(item, "composition_score", 0.50)
-    detail = _safe_float(item, "detail_score", composition)
-    contrast = _safe_float(item, "contrast_score", 0.50)
-    sharpness = _safe_float(item, "sharpness_score", 0.50)
-    color = _safe_float(item, "color_score", 0.50)
-
-    try:
-        faces = max(0, int(item.get("face_count") or 0))
-    except (TypeError, ValueError):
-        faces = 0
-    # 1–4 volti danno un incremento utile senza dominare gli altri segnali.
-    face_score = _clamp01(math.log1p(faces) / math.log(5.0))
-
-    score = (
-        0.28 * composition
-        + 0.24 * detail
-        + 0.16 * sharpness
-        + 0.12 * contrast
-        + 0.08 * color
-        + 0.12 * face_score
-    )
-    return _clamp01(score)
-
-
-def photo_duration(item: dict[str, Any]) -> float:
-    """Durata adattiva sempre compresa tra 2.5 e 5.5 secondi."""
-    score = _photo_visual_score(item)
-
-    # Curva morbida: foto semplici ~2.8–3.4s, normali ~3.5–4.3s,
-    # immagini ricche/importanti ~4.4–5.5s.
-    duration = PHOTO_MIN_SEC + (PHOTO_MAX_SEC - PHOTO_MIN_SEC) * (score ** 0.78)
-
-    faces = max(0, int(item.get("face_count") or 0))
-    if faces >= 2:
-        duration += min(0.45, 0.10 * (faces - 1))
-
-    if _safe_float(item, "detail_score", 0.50) >= 0.82:
-        duration += 0.25
-    if _safe_float(item, "composition_score", 0.50) >= 0.85:
-        duration += 0.25
-
-    return round(max(PHOTO_MIN_SEC, min(PHOTO_MAX_SEC, duration)), 2)
+def _provisional_duration(item: dict[str, Any]) -> float:
+    """Duration shown before music is available; Edit Director replaces it."""
+    profile = item.get("vision_analysis") or {}
+    importance = max(0.0, min(1.0, float(profile.get("importance", 0.5))))
+    return round(2.5 + 2.0 * importance, 2)
 
 
 async def run(project_state: dict) -> dict:
     media_list: list[dict[str, Any]] = project_state.get("media", [])
-    clips: list[dict[str, Any]] = []
+    tasks = [_analyze_one_photo(item) for item in media_list if item.get("type") == "photo"]
+    if tasks:
+        await asyncio.gather(*tasks)
 
+    clips: list[dict[str, Any]] = []
     for item in media_list:
         if item.get("type") == "photo":
-            duration = photo_duration(item)
-            item["duration_sec"] = duration
+            # Pydantic richiede un float nel ProjectState: questo valore è solo
+            # provvisorio. L'Edit Director lo sostituisce con la durata musicale.
+            item["duration_sec"] = _provisional_duration(item)
+            item["duration_source"] = "vision_provisional"
             item["trim_start_sec"] = None
             item["trim_end_sec"] = None
         else:
@@ -89,7 +82,6 @@ async def run(project_state: dict) -> dict:
                 start = round((dur - MAX_VIDEO_SEC) / 2.0, 2)
                 item["trim_start_sec"] = start
                 item["trim_end_sec"] = round(start + MAX_VIDEO_SEC, 2)
-                item["duration_sec"] = MAX_VIDEO_SEC
             else:
                 item["trim_start_sec"] = None
                 item["trim_end_sec"] = None
