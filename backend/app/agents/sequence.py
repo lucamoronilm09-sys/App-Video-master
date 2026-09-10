@@ -21,12 +21,7 @@ def _clamp01(value: float) -> float:
 
 
 def _photo_visual_score(item: dict[str, Any]) -> float:
-    """Combina i segnali visivi prodotti da Intake in uno score 0–1.
-
-    Non è un modello ML: è uno scoring deterministico leggero che evita che
-    tutte le foto finiscano sulla stessa durata e premia immagini dense,
-    nitide e con soggetti umani.
-    """
+    """Combina i segnali visivi prodotti da Intake in uno score 0–1."""
     composition = _clamp01(float(item.get("composition_score") or 0.5))
     detail = _clamp01(float(item.get("detail_score") or composition))
     contrast = _clamp01(float(item.get("contrast_score") or 0.5))
@@ -35,7 +30,7 @@ def _photo_visual_score(item: dict[str, Any]) -> float:
     faces = max(0, int(item.get("face_count") or 0))
     face_score = _clamp01(math.log1p(faces) / math.log(9.0))
 
-    score = (
+    return _clamp01(
         0.28 * composition
         + 0.24 * detail
         + 0.16 * sharpness
@@ -43,24 +38,15 @@ def _photo_visual_score(item: dict[str, Any]) -> float:
         + 0.08 * color
         + 0.12 * face_score
     )
-    return _clamp01(score)
 
 
 def photo_duration(item: dict[str, Any]) -> float:
-    """Durata cinematografica adattiva 3–8s.
-
-    La curva è non lineare: le foto più importanti ricevono molto più tempo,
-    mentre quelle semplici rimangono rapide. Questo rende 3.6s un caso
-    intermedio, non una durata ricorrente fissa.
-    """
+    """Durata cinematografica adattiva 3–8s."""
     score = _photo_visual_score(item)
-    # Curva morbida: concentra più foto nella fascia 4–6s e lascia 7–8s
-    # alle immagini realmente ricche/importanti.
-    curved = score ** 0.72
-    duration = PHOTO_BASE_MIN_SEC + (PHOTO_BASE_MAX_SEC - PHOTO_BASE_MIN_SEC) * curved
+    # Curva non lineare: evita che tutte le foto si concentrino vicino al valore
+    # medio e riserva 7–8s alle immagini davvero ricche/importanti.
+    duration = PHOTO_BASE_MIN_SEC + (PHOTO_BASE_MAX_SEC - PHOTO_BASE_MIN_SEC) * (score ** 0.72)
 
-    # Protezione per foto molto significative: gruppi, ritratti e immagini
-    # ad alto dettaglio non devono essere accorciati troppo dal punteggio base.
     faces = max(0, int(item.get("face_count") or 0))
     detail = _clamp01(float(item.get("detail_score") or 0.0))
     if faces >= 2:
@@ -68,53 +54,7 @@ def photo_duration(item: dict[str, Any]) -> float:
     if detail >= 0.82:
         duration += 0.45
 
-    return round(max(PHOTO_BASE_MIN_SEC, min(PHOTO_BASE_MAX_SEC, duration)), 2)
-
-
-def _distribute_to_target(
-    durations: list[float],
-    photo_indices: list[int],
-    target_total: float,
-    gaps: list[float],
-) -> list[float]:
-    """Adatta il totale alle esigenze audio senza appiattire le durate.
-
-    Quando bisogna accorciare, riduce prima le foto meno importanti.
-    Quando bisogna allungare, distribuisce il tempo alle foto più importanti.
-    """
-    out = list(durations)
-    if not photo_indices:
-        return out
-
-    def total() -> float:
-        return round(sum(out) - sum(gaps), 2)
-
-    diff = round(target_total - total(), 2)
-    if abs(diff) < 0.01:
-        return out
-
-    if diff < 0:
-        candidates = sorted(photo_indices, key=lambda i: _photo_visual_score({"composition_score": 0, **{}}))
-        # La priorità reale viene recuperata sotto attraverso l'ordine delle
-        # durate: riduciamo prima le immagini più brevi e preserviamo quelle già lunghe.
-        candidates = sorted(photo_indices, key=lambda i: out[i])
-    else:
-        candidates = sorted(photo_indices, key=lambda i: out[i], reverse=True)
-
-    remaining = abs(diff)
-    for i in candidates:
-        if remaining <= 0.01:
-            break
-        if diff < 0:
-            capacity = max(0.0, out[i] - PHOTO_BASE_MIN_SEC)
-            change = min(capacity, remaining)
-            out[i] = round(out[i] - change, 2)
-        else:
-            capacity = max(0.0, PHOTO_BASE_MAX_SEC - out[i])
-            change = min(capacity, remaining)
-            out[i] = round(out[i] + change, 2)
-        remaining -= change
-    return out
+    return round(_clamp01((duration - PHOTO_BASE_MIN_SEC) / (PHOTO_BASE_MAX_SEC - PHOTO_BASE_MIN_SEC)) * (PHOTO_BASE_MAX_SEC - PHOTO_BASE_MIN_SEC) + PHOTO_BASE_MIN_SEC, 2)
 
 
 async def run(project_state: dict) -> dict:
