@@ -148,8 +148,9 @@ def _run_checked(args: list[str], description: str) -> None:
 
 def _segment_input_args(kind: str, path: str, fps: int, duration: float = 0.0) -> list[str]:
     if kind == "photo":
-        # Usiamo tpad nel filter graph invece di -loop per evitare incompatibilità con HEIC/HEVC
-        return ["-framerate", str(fps), "-i", path]
+        # Per HEIC/HEIF e altre immagini statiche, usiamo input_type image2
+        # con -t per specificare la durata, evitando -framerate che può dare errori
+        return ["-i", path, "-t", str(duration)]
     return ["-i", path]
 
 
