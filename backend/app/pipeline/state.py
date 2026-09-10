@@ -1,10 +1,4 @@
-"""Project State: unico canale di comunicazione tra gli agenti (JSON su filesystem).
-
-Il formato rispetta lo schema definito in architettura-video-maker-ia.md (sez. 4),
-piu' due campi operativi documentati in PROGRESS.md:
-- "errors": lista di errori non bloccanti (usata gia' da Intake, RF-architettura);
-- "pipeline_log": traccia degli step eseguiti (per la UI di avanzamento in M8).
-"""
+"""Project State: unico canale di comunicazione tra gli agenti (JSON su filesystem)."""
 from __future__ import annotations
 
 import json
@@ -28,10 +22,12 @@ SCHEMA_VERSION = 1
 
 def new_project_state() -> dict:
     pid = uuid.uuid4().hex[:8]
+    now = time.time()
     return {
         "schema_version": SCHEMA_VERSION,
         "project_id": pid,
         "name": "Nuovo progetto",
+        "user_prompt": "",
         "media": [],
         "audio_tracks": [],
         "audio": {
@@ -44,13 +40,17 @@ def new_project_state() -> dict:
         "style_profile": DEFAULT_STYLE_PROFILE,
         "output_spec": dict(DEFAULT_OUTPUT_SPEC),
         "edit_decision_list": [],
+        "story_chapters": [],
+        "music_structure": {},
         "clip_overrides": {},
+        "ai_feedback": None,
+        "ai_feedback_history": [],
         "render_manifest": None,
         "qa_report": None,
         "errors": [],
         "pipeline_log": [],
-        "created_at": time.time(),
-        "updated_at": time.time(),
+        "created_at": now,
+        "updated_at": now,
     }
 
 
@@ -75,7 +75,6 @@ def thumbs_dir(project_id: str) -> Path:
 
 
 def ensure_project_dirs(project_id: str) -> Path:
-    """Crea (se assenti) le cartella di lavoro del progetto."""
     d = project_dir(project_id)
     for sub in (MEDIA_SUBDIR, AUDIO_SUBDIR, OUTPUT_SUBDIR, THUMBS_SUBDIR):
         (d / sub).mkdir(parents=True, exist_ok=True)
@@ -100,9 +99,18 @@ def load_state(project_id: str) -> dict:
     if not p.exists():
         raise FileNotFoundError(f"Progetto inesistente: {project_id}")
     state = json.loads(p.read_text(encoding="utf-8"))
-    # Compatibilita' con progetti creati prima del campo name.
-    if not state.get("name"):
-        state["name"] = "Nuovo progetto"
+    # Compatibilità con progetti precedenti alle nuove funzioni.
+    defaults = {
+        "name": "Nuovo progetto",
+        "user_prompt": "",
+        "story_chapters": [],
+        "music_structure": {},
+        "ai_feedback": None,
+        "ai_feedback_history": [],
+    }
+    for key, value in defaults.items():
+        if key not in state:
+            state[key] = value
     return state
 
 
@@ -119,14 +127,12 @@ def list_projects() -> list[dict[str, Any]]:
         except Exception:
             continue
         manifest = st.get("render_manifest") or {}
-        out.append(
-            {
-                "project_id": st.get("project_id"),
-                "name": st.get("name") or "Nuovo progetto",
-                "media_count": len(st.get("media", [])),
-                "has_audio": bool((st.get("audio") or {}).get("path")),
-                "has_render": manifest.get("status") == "done",
-                "updated_at": st.get("updated_at"),
-            }
-        )
+        out.append({
+            "project_id": st.get("project_id"),
+            "name": st.get("name") or "Nuovo progetto",
+            "media_count": len(st.get("media", [])),
+            "has_audio": bool((st.get("audio") or {}).get("path")),
+            "has_render": manifest.get("status") == "done",
+            "updated_at": st.get("updated_at"),
+        })
     return out
