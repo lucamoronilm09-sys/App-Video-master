@@ -7,40 +7,61 @@ state["errors"] (non bloccanti); i file validi popolano state["media"].
 from __future__ import annotations
 
 import asyncio
+import math
 import uuid
 from pathlib import Path
 
 from PIL import Image, ImageOps
+from PIL import ImageStat
 
 try:
     import cv2
 except ImportError:
     cv2 = None
 
-
 from app.services.media_inspect import inspect_media
 
 
 def _photo_content_features(path: Path) -> tuple[int, float]:
-    """Stima volti e complessità visiva su una copia ridotta della foto."""
-    if cv2 is None:
-        return 0, 0.5
+    """Stima volti e complessità visiva su una copia ridotta della foto.
+
+    Se OpenCV non è disponibile, usa un fallback Pillow-only invece del valore
+    fisso 0.5: in questo modo le foto non ricevono tutte la stessa durata.
+    """
     try:
-        import numpy as np
         with Image.open(path) as im:
             im = ImageOps.exif_transpose(im).convert("RGB")
             im.thumbnail((1000, 1000))
-            gray = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2GRAY)
-            edges = cv2.Canny(gray, 80, 160)
-            edge_density = float((edges > 0).mean())
-            hist = cv2.calcHist([gray], [0], None, [64], [0, 256])
-            cv2.normalize(hist, hist)
-            vals = hist[hist > 0]
-            entropy = float(-(vals * np.log2(vals)).sum())
-            cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-            faces = cascade.detectMultiScale(gray, scaleFactor=1.12, minNeighbors=5, minSize=(32, 32)) if not cascade.empty() else []
-            complexity = max(0.0, min(1.0, 0.55 * (entropy / 6.0) + 0.45 * min(1.0, edge_density * 5.0)))
-            return int(len(faces)), round(complexity, 3)
+
+            if cv2 is not None:
+                import numpy as np
+                gray = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2GRAY)
+                edges = cv2.Canny(gray, 80, 160)
+                edge_density = float((edges > 0).mean())
+                hist = cv2.calcHist([gray], [0], None, [64], [0, 256])
+                cv2.normalize(hist, hist)
+                vals = hist[hist > 0]
+                entropy = float(-(vals * np.log2(vals)).sum())
+                cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+                faces = cascade.detectMultiScale(
+                    gray, scaleFactor=1.12, minNeighbors=5, minSize=(32, 32)
+                ) if not cascade.empty() else []
+                complexity = max(
+                    0.0,
+                    min(1.0, 0.55 * (entropy / 6.0) + 0.45 * min(1.0, edge_density * 5.0)),
+                )
+                return int(len(faces)), round(complexity, 3)
+
+            # Fallback robusto senza OpenCV: entropia dell'istogramma + varianza.
+            gray = ImageOps.grayscale(im)
+            hist = gray.histogram()
+            total = sum(hist) or 1
+            entropy = -sum((n / total) * math.log2(n / total) for n in hist if n)
+            variance = ImageStat.Stat(gray).var[0]
+            variance_score = min(1.0, math.sqrt(max(0.0, variance)) / 80.0)
+            entropy_score = min(1.0, entropy / 7.5)
+            complexity = max(0.0, min(1.0, 0.65 * entropy_score + 0.35 * variance_score))
+            return 0, round(complexity, 3)
     except Exception:
         return 0, 0.5
 
@@ -98,5 +119,5 @@ async def run(project_state: dict) -> dict:
 
     project_state["media"].extend(new_media)
     project_state["errors"] = new_errors
-    project_state["media_staging"] = []  # consumato
+    project_state["media_staging"] = []
     return project_state
