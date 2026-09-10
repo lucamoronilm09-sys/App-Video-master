@@ -1,9 +1,9 @@
 """Agente 5: Render.
 
-Esegue il render FFmpeg dal render_manifest. Per comandi brevi usa il percorso
-normale; quando la command line supera una soglia sicura per Windows, passa
-a un render segmentato: ogni clip viene preparata separatamente e poi unita
-in modo incrementale, evitando WinError 206 senza perdere transizioni.
+Render FFmpeg con fallback Windows segmentato quando la command line è troppo
+lunga. I segmenti usano sempre timestamp/durata espliciti; ffprobe può quindi
+verificare la durata, ma il manifest resta la fonte di verità se un container
+intermedio non espone metadata di durata affidabili.
 """
 from __future__ import annotations
 
@@ -43,10 +43,7 @@ def _run_ffmpeg(args: list[str], total_sec: float = 0.0,
     if job_id and total_sec > 0:
         return _run_ffmpeg_progress(args, total_sec, job_id)
     return subprocess.run(
-        args,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
+        args, stdin=subprocess.DEVNULL, capture_output=True, text=True,
         timeout=RENDER_TIMEOUT_SEC,
     )
 
@@ -61,9 +58,7 @@ def _run_ffmpeg_progress(args: list[str], total_sec: float,
     start = time.time()
     with open(ef, "w", encoding="utf-8", errors="ignore") as errfh:
         proc = subprocess.Popen(
-            pargs,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
+            pargs, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=errfh,
         )
         while proc.poll() is None:
@@ -87,8 +82,6 @@ def _run_ffmpeg_progress(args: list[str], total_sec: float,
 
 
 def _cmdline_length(args: list[str]) -> int:
-    # Windows CreateProcess lavora su una command line finita; teniamo un
-    # margine per quotatura/runtime e non contiamo solo i caratteri visibili.
     return len(" ".join(str(x) for x in args))
 
 
@@ -99,20 +92,19 @@ def _input_paths_from_args(args: list[str]) -> list[str]:
         if args[i] == "-i":
             paths.append(str(args[i + 1]))
             i += 2
-            continue
-        i += 1
+        else:
+            i += 1
     return paths
 
 
 def _extract_segment_filter(script_path: Path, input_index: int) -> str:
-    """Estrae dal filter graph completo solo la catena della clip richiesta."""
+    """Estrae dal graph completo solo la catena video della clip richiesta."""
     text = script_path.read_text(encoding="utf-8", errors="ignore")
     lines = [line.strip() for line in text.split(";") if line.strip()]
     labels = {
         f"pbg{input_index}", f"pfg{input_index}",
         f"bg{input_index}", f"fg{input_index}",
-        f"vibg{input_index}", f"vifg{input_index}",
-        f"v{input_index}",
+        f"vibg{input_index}", f"vifg{input_index}", f"v{input_index}",
     }
     selected: list[str] = []
     label_re = re.compile(r"\[([^\]]+)\]")
@@ -120,14 +112,13 @@ def _extract_segment_filter(script_path: Path, input_index: int) -> str:
         if "xfade=" in line or "concat=n=" in line or "format=yuv420p[vout]" in line:
             continue
         if any(label in labels for label in label_re.findall(line)):
-            if re.search(rf"\[{input_index}:v\]", line):
-                selected.append(line)
-            elif any(f"[{label}]" in line for label in labels):
+            if re.search(rf"\[{input_index}:v\]", line) or any(
+                f"[{label}]" in line for label in labels
+            ):
                 selected.append(line)
     if not selected:
         raise RuntimeError(f"Impossibile estrarre il filtro della clip {input_index}")
     graph = ";\n".join(selected)
-    # La clip standalone usa sempre l'ingresso 0 e produce [vout].
     graph = graph.replace(f"[{input_index}:v]", "[0:v]")
     graph = graph.replace(f"[v{input_index}]", "[vout]")
     return graph
@@ -135,10 +126,7 @@ def _extract_segment_filter(script_path: Path, input_index: int) -> str:
 
 def _run_checked(args: list[str], description: str) -> None:
     proc = subprocess.run(
-        args,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
+        args, stdin=subprocess.DEVNULL, capture_output=True, text=True,
         timeout=RENDER_TIMEOUT_SEC,
     )
     if proc.returncode != 0:
@@ -148,20 +136,15 @@ def _run_checked(args: list[str], description: str) -> None:
 
 def _segment_input_args(kind: str, path: str, fps: int, duration: float = 0.0) -> list[str]:
     if kind == "photo":
-        # Per HEIC/HEIF e altre immagini statiche, usiamo input_type image2
-        # con -t per specificare la durata, evitando -framerate che può dare errori
-        return ["-i", path, "-t", str(duration)]
+        # Una foto deve essere trattata come sorgente video per evitare MP4 a
+        # singolo frame o metadata di durata mancanti nel fallback segmentato.
+        return ["-loop", "1", "-framerate", str(fps), "-i", path, "-t", str(duration)]
     return ["-i", path]
 
 
 def _encode_segment(
-    segment: dict[str, Any],
-    input_path: str,
-    script_path: Path,
-    fps: int,
-    vcodec: str,
-    crf: int,
-    out_path: Path,
+    segment: dict[str, Any], input_path: str, script_path: Path,
+    fps: int, vcodec: str, crf: int, out_path: Path,
 ) -> None:
     index = int(segment["input_index"])
     graph = _extract_segment_filter(script_path, index)
@@ -176,55 +159,67 @@ def _encode_segment(
         "-crf", str(crf),
         "-pix_fmt", "yuv420p",
         "-r", str(fps),
+        "-fps_mode", "cfr",
+        "-video_track_timescale", "90000",
         "-an",
+        "-t", str(duration),
+        "-movflags", "+faststart",
         str(out_path),
     ]
     _run_checked(args, f"render segmento {index + 1}")
 
 
 def _merge_two_video_segments(
-    left: Path,
-    right: Path,
-    duration_left: float,
-    transition: float,
-    fps: int,
-    vcodec: str,
-    crf: int,
-    out_path: Path,
+    left: Path, right: Path, duration_left: float, duration_right: float,
+    transition: float, fps: int, vcodec: str, crf: int, out_path: Path,
 ) -> float:
     if transition > 0:
         offset = max(0.0, duration_left - transition)
         graph = f"[0:v][1:v]xfade=transition=fade:duration={transition:.3f}:offset={offset:.3f}[vout]"
-        new_duration = round(duration_left + _probe_duration(right) - transition, 3)
+        new_duration = round(duration_left + duration_right - transition, 3)
     else:
         graph = "[0:v][1:v]concat=n=2:v=1:a=0[vout]"
-        new_duration = round(duration_left + _probe_duration(right), 3)
+        new_duration = round(duration_left + duration_right, 3)
 
     args = [
         "ffmpeg", "-y", "-i", str(left), "-i", str(right),
         "-filter_complex", graph, "-map", "[vout]",
         "-c:v", vcodec, "-preset", "medium", "-crf", str(crf),
-        "-pix_fmt", "yuv420p", "-r", str(fps), "-an", str(out_path),
+        "-pix_fmt", "yuv420p", "-r", str(fps), "-fps_mode", "cfr",
+        "-video_track_timescale", "90000", "-an", "-t", str(new_duration),
+        "-movflags", "+faststart", str(out_path),
     ]
     _run_checked(args, "unione segmenti")
     return new_duration
 
 
-def _probe_duration(path: Path) -> float:
+def _probe_duration(path: Path, fallback: float | None = None) -> float:
+    """Legge la durata in modo robusto da format o stream metadata."""
     proc = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        timeout=120,
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration:stream=duration",
+            "-of", "csv=p=0", str(path),
+        ],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120,
     )
+    values: list[float] = []
+    if proc.returncode == 0:
+        for token in re.split(r"[\r\n,]+", proc.stdout or ""):
+            try:
+                value = float(token.strip())
+            except ValueError:
+                continue
+            if value > 0:
+                values.append(value)
+    if values:
+        return max(values)
+    if fallback is not None and fallback > 0:
+        return round(float(fallback), 3)
+    detail = (proc.stderr or "").strip()
     if proc.returncode != 0:
-        raise RuntimeError(f"ffprobe fallito su {path}: {(proc.stderr or '').strip()}")
-    try:
-        return float((proc.stdout or "").strip())
-    except ValueError as exc:
-        raise RuntimeError(f"durata non leggibile per {path}") from exc
+        raise RuntimeError(f"ffprobe fallito su {path}: {detail}")
+    raise RuntimeError(f"durata non leggibile per {path}")
 
 
 def _render_segmented(manifest: dict[str, Any], job_id: str | None) -> Path:
@@ -251,40 +246,45 @@ def _render_segmented(manifest: dict[str, Any], job_id: str | None) -> Path:
         completed = 0.0
         for i, segment in enumerate(segments):
             part = work / f"seg_{i:04d}.mp4"
+            expected = float(segment.get("duration_sec") or 0.0)
             _encode_segment(
-                segment,
-                input_paths[int(segment["input_index"])],
-                script_path,
-                fps,
-                vcodec,
-                crf,
-                part,
+                segment, input_paths[int(segment["input_index"])], script_path,
+                fps, vcodec, crf, part,
             )
             rendered.append(part)
-            dur = _probe_duration(part)
+            dur = _probe_duration(part, fallback=expected)
+            # Evita che metadata bizzarri di un MP4 intermedio trascinino
+            # deriva temporale: il compiler ha già quantizzato la durata.
+            if expected > 0 and abs(dur - expected) > max(0.08, 2.0 / fps):
+                dur = round(expected, 3)
             durations.append(dur)
             completed += dur
             if job_id:
-                prog.set(job_id, min(0.55, 0.05 + 0.50 * completed / max(total, 0.01)), f"clip {i + 1}/{len(segments)}")
+                prog.set(
+                    job_id,
+                    min(0.55, 0.05 + 0.50 * completed / max(total, 0.01)),
+                    f"clip {i + 1}/{len(segments)}",
+                )
 
         current = rendered[0]
         current_duration = durations[0]
         for i in range(1, len(rendered)):
             merged = work / f"merge_{i:04d}.mp4"
-            trans = float((transitions[i - 1] if i - 1 < len(transitions) else {}).get("duration_sec", 0.0) or 0.0)
+            trans = float(
+                (transitions[i - 1] if i - 1 < len(transitions) else {})
+                .get("duration_sec", 0.0) or 0.0
+            )
             current_duration = _merge_two_video_segments(
-                current,
-                rendered[i],
-                current_duration,
-                trans,
-                fps,
-                vcodec,
-                crf,
-                merged,
+                current, rendered[i], current_duration, durations[i],
+                trans, fps, vcodec, crf, merged,
             )
             current = merged
             if job_id:
-                prog.set(job_id, min(0.85, 0.55 + 0.30 * i / max(1, len(rendered) - 1)), f"unione clip {i + 1}/{len(rendered)}")
+                prog.set(
+                    job_id,
+                    min(0.85, 0.55 + 0.30 * i / max(1, len(rendered) - 1)),
+                    f"unione clip {i + 1}/{len(rendered)}",
+                )
 
         audio = manifest.get("audio") or {}
         tracks = list(audio.get("tracks") or [])
@@ -298,12 +298,32 @@ def _render_segmented(manifest: dict[str, Any], job_id: str | None) -> Path:
                     raise RuntimeError("Traccia audio senza path")
                 audio_args += ["-i", str(path)]
                 labels.append(f"[{idx}:a]")
+            target_total = float(manifest.get("total_sec") or current_duration)
             if len(labels) == 1:
-                graph = f"{labels[0]}aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS,aloop=loop=-1:size=2147483647,atrim=duration={float(manifest.get('total_sec') or 0.0):.3f},afade=t=in:d=0.5,afade=t=out:st={max(0.0, float(manifest.get('total_sec') or 0.0)-1.0):.3f}:d=1[aout]"
+                graph = (
+                    f"{labels[0]}aformat=sample_rates=44100:channel_layouts=stereo,"
+                    f"aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS,"
+                    f"aloop=loop=-1:size=2147483647,atrim=duration={target_total:.3f},"
+                    f"afade=t=in:d=0.5,"
+                    f"afade=t=out:st={max(0.0, target_total - 1.0):.3f}:d=1[aout]"
+                )
             else:
                 graph = "".join(labels) + f"concat=n={len(labels)}:v=0:a=1[a]"
-                graph += f";[a]aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS,aloop=loop=-1:size=2147483647,atrim=duration={float(manifest.get('total_sec') or 0.0):.3f},afade=t=in:d=0.5,afade=t=out:st={max(0.0, float(manifest.get('total_sec') or 0.0)-1.0):.3f}:d=1[aout]"
-            _run_checked(audio_args + ["-filter_complex", graph, "-map", "[aout]", "-c:a", "aac", "-b:a", "160k", str(audio_mix)], "preparazione audio")
+                graph += (
+                    f";[a]aformat=sample_rates=44100:channel_layouts=stereo,"
+                    f"aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS,"
+                    f"aloop=loop=-1:size=2147483647,atrim=duration={target_total:.3f},"
+                    f"afade=t=in:d=0.5,"
+                    f"afade=t=out:st={max(0.0, target_total - 1.0):.3f}:d=1[aout]"
+                )
+            _run_checked(
+                audio_args + [
+                    "-filter_complex", graph, "-map", "[aout]",
+                    "-c:a", "aac", "-b:a", "160k", "-t", str(target_total),
+                    str(audio_mix),
+                ],
+                "preparazione audio",
+            )
 
             temp_output = work / "final.mp4"
             mux_args = [
