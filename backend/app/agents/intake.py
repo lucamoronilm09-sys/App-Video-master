@@ -1,8 +1,8 @@
 """Agente 0: Intake.
 
-Valida i file ed estrae metadata. Per le foto calcola anche segnali tecnici
-reali (volti, composizione, dettaglio, nitidezza, contrasto e interesse colore)
-che il Vision Analyzer può integrare nel punteggio editoriale.
+Valida i file ed estrae metadata. Per le foto combina segnali tecnici reali
+con una vera analisi Vision, quando disponibile, per alimentare il montaggio
+editoriale e la durata intelligente.
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ except ImportError:
     cv2 = None
 
 from app.services.media_inspect import inspect_media
+from app.services.vision_analyzer import analyze_photo
 
 
 def _photo_content_features(path: Path) -> tuple[int, float, float, float, float, float]:
@@ -56,7 +57,6 @@ def _photo_content_features(path: Path) -> tuple[int, float, float, float, float
                     round(sharpness, 3), round(contrast, 3), round(colorfulness, 3),
                 )
 
-            # Pillow-only fallback.
             variance = max(0.0, float(stats.var[0]))
             sharpness = min(1.0, math.sqrt(variance) / 80.0)
             detail = max(0.0, min(1.0, 0.65 * contrast + 0.35 * sharpness))
@@ -70,9 +70,20 @@ async def _process_one(path: Path, source: str, drive_file_id: str | None) -> di
     try:
         meta = await inspect_media(path)
         face_count, composition, detail, sharpness, contrast, color = (0, 0.5, 0.5, 0.5, 0.5, 0.5)
+        vision: dict = {}
         if meta["type"] == "photo":
             values = await asyncio.to_thread(_photo_content_features, path)
             face_count, composition, detail, sharpness, contrast, color = values
+            try:
+                vision = await asyncio.to_thread(analyze_photo, path)
+            except Exception as exc:
+                vision = {
+                    "ai_used": False,
+                    "vision_provider": "error",
+                    "vision_error": str(exc),
+                }
+
+        people_count = int(vision.get("people_count", face_count) or face_count or 0)
         return {
             "id": uuid.uuid4().hex[:12],
             "source": source,
@@ -90,6 +101,11 @@ async def _process_one(path: Path, source: str, drive_file_id: str | None) -> di
             "sharpness_score": sharpness,
             "contrast_score": contrast,
             "color_score": color,
+            "people_count": people_count,
+            "importance_score": float(vision.get("importance", 0.5) or 0.5),
+            "vision_ai_used": bool(vision.get("ai_used", False)),
+            "scene_type": vision.get("scene_type"),
+            "vision_analysis": vision or None,
             "order_index": 0,
         }
     except Exception as exc:
