@@ -5,7 +5,9 @@ Providers:
 - OpenAI-compatible HTTP endpoint: configurable via environment variables.
 - Local Pillow/OpenCV fallback when no Vision model is available.
 
-Set VISION_PROVIDER=disabled to force the local fallback (useful for tests).
+The model is asked for editorial signals, not only object labels: story value,
+emotional weight, subject clarity, visual interest, composition, image quality,
+attention center, redundancy risk and pacing.
 """
 from __future__ import annotations
 
@@ -32,27 +34,52 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     cv2 = None
 
-PROMPT = """Analyze this photo for an automatic memory-video editor.
-Return ONLY valid JSON with these fields:
+PROMPT = """You are the visual editor for a personal memory video.
+Analyze the photograph itself and return ONLY valid JSON. Do not discuss image
+quality in place of editorial value: both matter.
+
+Required JSON:
 {
   "importance": 0.0,
+  "story_value": 0.0,
   "emotional_intensity": 0.0,
   "subject_clarity": 0.0,
   "visual_interest": 0.0,
+  "visual_quality": 0.0,
+  "composition_balance": 0.0,
+  "attention_score": 0.0,
   "people_count": 0,
+  "faces_clear": 0.0,
   "is_group_photo": false,
   "is_portrait": false,
   "is_landscape": false,
   "is_action": false,
   "is_closeup": false,
   "scene_type": "unknown",
-  "recommended_pacing": "normal"
+  "attention_center": "unknown",
+  "recommended_focus": "scene",
+  "recommended_pacing": "normal",
+  "repetition_risk": 0.0
 }
-All four scores must be between 0 and 1. Judge the photograph itself, not image
-quality alone. Importance means how much screen time a human editor would likely
-give it in a personal memory montage. More people can increase importance when
-faces are clearly visible, but do not reward a crowded image automatically.
-Use recommended_pacing = fast, normal, slow, or hold. No markdown or explanation."""
+
+All numeric scores except people_count are 0..1. people_count is 0..20.
+Importance = how much screen time a human editor would give this frame.
+Story value = how strongly the image contributes a memorable moment or narrative.
+Emotional intensity = visible emotional or human significance, not color saturation.
+Subject clarity = how immediately the main subject reads.
+Visual interest = composition, depth, light and scene uniqueness.
+Visual quality = sharpness/exposure/technical usability as seen by a human.
+Composition balance = quality of framing and visual balance.
+Attention score = how strongly the main subject attracts the eye.
+Faces_clear = 0..1 estimate of how clearly visible important faces are.
+Do not reward crowds automatically: 8 people with tiny faces can be less useful
+than one clearly visible person. repetition_risk estimates how generic/repetitive
+this single image is likely to feel in a memory montage; use visual content, not
+file metadata. recommended_focus = people, scene, detail, action, or subject.
+recommended_pacing = fast, normal, slow, or hold.
+scene_type should be concise (e.g. beach, city, dinner, hiking, portrait, group,
+landscape, celebration). attention_center should be concise.
+No markdown, no explanation."""
 
 
 class VisionError(RuntimeError):
@@ -99,7 +126,10 @@ def _extract_json(text: str) -> dict[str, Any]:
     match = re.search(r"\{.*\}", text, flags=re.DOTALL)
     if not match:
         raise VisionError("Il modello Vision non ha restituito JSON")
-    data = json.loads(match.group(0))
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError as exc:
+        raise VisionError("JSON Vision non valido") from exc
     if not isinstance(data, dict):
         raise VisionError("Risposta Vision non valida")
     return data
@@ -110,23 +140,34 @@ def _normalize_profile(data: dict[str, Any]) -> dict[str, Any]:
         people = max(0, min(20, int(data.get("people_count", data.get("face_count", 0)))))
     except (TypeError, ValueError):
         people = 0
-    pacing = str(data.get("recommended_pacing", "normal")).lower()
+    pacing = str(data.get("recommended_pacing", "normal")).lower().strip()
     if pacing not in {"fast", "normal", "slow", "hold"}:
         pacing = "normal"
+    focus = str(data.get("recommended_focus", "scene")).lower().strip()
+    if focus not in {"people", "scene", "detail", "action", "subject"}:
+        focus = "scene"
     return {
         "ai_used": True,
         "importance": round(_clamp01(data.get("importance"), 0.55), 3),
+        "story_value": round(_clamp01(data.get("story_value"), 0.5), 3),
         "emotional_intensity": round(_clamp01(data.get("emotional_intensity"), 0.5), 3),
         "subject_clarity": round(_clamp01(data.get("subject_clarity"), 0.5), 3),
         "visual_interest": round(_clamp01(data.get("visual_interest"), 0.5), 3),
+        "visual_quality": round(_clamp01(data.get("visual_quality"), 0.5), 3),
+        "composition_balance": round(_clamp01(data.get("composition_balance"), 0.5), 3),
+        "attention_score": round(_clamp01(data.get("attention_score"), 0.5), 3),
         "people_count": people,
+        "faces_clear": round(_clamp01(data.get("faces_clear"), 0.5), 3),
         "is_group_photo": bool(data.get("is_group_photo", people >= 2)),
         "is_portrait": bool(data.get("is_portrait", False)),
         "is_landscape": bool(data.get("is_landscape", False)),
         "is_action": bool(data.get("is_action", False)),
         "is_closeup": bool(data.get("is_closeup", False)),
         "scene_type": str(data.get("scene_type", "unknown"))[:80],
+        "attention_center": str(data.get("attention_center", "unknown"))[:100],
+        "recommended_focus": focus,
         "recommended_pacing": pacing,
+        "repetition_risk": round(_clamp01(data.get("repetition_risk"), 0.25), 3),
     }
 
 
@@ -180,7 +221,13 @@ def _analyze_ollama(image_b64: str) -> dict[str, Any]:
         raise VisionError("Nessun modello Vision Ollama disponibile")
     result = _post_json(
         f"{_ollama_url()}/api/chat",
-        {"model": model, "messages": [{"role": "user", "content": PROMPT, "images": [image_b64]}], "stream": False, "format": "json", "options": {"temperature": 0}},
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": PROMPT, "images": [image_b64]}],
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": 0},
+        },
     )
     message = result.get("message") or {}
     return _normalize_profile(_extract_json(str(message.get("content", ""))))
@@ -193,10 +240,14 @@ def _analyze_openai_compatible(image_b64: str) -> dict[str, Any]:
         raise VisionError("VISION_BASE_URL e VISION_MODEL non configurati")
     result = _post_json(
         f"{base}/chat/completions",
-        {"model": model, "temperature": 0, "messages": [{"role": "user", "content": [
-            {"type": "text", "text": PROMPT},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-        ]}]},
+        {
+            "model": model,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": PROMPT},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            ]}],
+        },
         {"Authorization": f"Bearer {_api_key()}"} if _api_key() else None,
     )
     choices = result.get("choices") or []
@@ -230,21 +281,30 @@ def _technical_fallback(path: Path) -> dict[str, Any]:
             sharpness = max(0.0, min(1.0, stat.var[0] ** 0.5 / 80.0))
             interest = max(0.0, min(1.0, contrast * 0.7 + sharpness * 0.3))
             people = 0
-        importance = max(0.0, min(1.0, 0.35 * interest + 0.25 * sharpness + 0.15 * contrast + 0.10 * color + 0.15 * min(1.0, people / 3.0)))
+        quality = max(0.0, min(1.0, 0.55 * sharpness + 0.25 * contrast + 0.20 * color))
+        importance = max(0.0, min(1.0, 0.34 * interest + 0.24 * quality + 0.12 * contrast + 0.10 * color + 0.20 * min(1.0, people / 3.0)))
         return {
             "ai_used": False,
             "importance": round(importance, 3),
+            "story_value": round(0.75 * importance + 0.25 * interest, 3),
             "emotional_intensity": round(min(1.0, contrast * 0.7 + interest * 0.3), 3),
             "subject_clarity": round((sharpness + contrast) / 2.0, 3),
             "visual_interest": round(interest, 3),
+            "visual_quality": round(quality, 3),
+            "composition_balance": round(0.5 + 0.25 * contrast, 3),
+            "attention_score": round(0.6 * interest + 0.4 * sharpness, 3),
             "people_count": people,
+            "faces_clear": round(sharpness if people else 0.0, 3),
             "is_group_photo": people >= 2,
             "is_portrait": im.height > im.width,
             "is_landscape": im.width > im.height,
             "is_action": False,
             "is_closeup": False,
             "scene_type": "unknown",
+            "attention_center": "unknown",
+            "recommended_focus": "people" if people else "scene",
             "recommended_pacing": "slow" if importance >= 0.75 else "normal",
+            "repetition_risk": round(max(0.0, min(1.0, 0.65 - 0.35 * interest)), 3),
         }
 
 
