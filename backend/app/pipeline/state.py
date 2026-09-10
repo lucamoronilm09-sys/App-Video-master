@@ -31,6 +31,7 @@ def new_project_state() -> dict:
     return {
         "schema_version": SCHEMA_VERSION,
         "project_id": pid,
+        "name": "Nuovo progetto",
         "media": [],
         "audio_tracks": [],
         "audio": {
@@ -43,9 +44,6 @@ def new_project_state() -> dict:
         "style_profile": DEFAULT_STYLE_PROFILE,
         "output_spec": dict(DEFAULT_OUTPUT_SPEC),
         "edit_decision_list": [],
-        # Override manuali per-clip (chiave = media_id): {duration_sec?,
-        # transition_out?, ken_burns?}. Scelte dell'utente, vince sul regista:
-        # l'agente clip_overrides li riapplica dopo ogni Edit Director.
         "clip_overrides": {},
         "render_manifest": None,
         "qa_report": None,
@@ -101,7 +99,11 @@ def load_state(project_id: str) -> dict:
     p = state_path(project_id)
     if not p.exists():
         raise FileNotFoundError(f"Progetto inesistente: {project_id}")
-    return json.loads(p.read_text(encoding="utf-8"))
+    state = json.loads(p.read_text(encoding="utf-8"))
+    # Compatibilita' con progetti creati prima del campo name.
+    if not state.get("name"):
+        state["name"] = "Nuovo progetto"
+    return state
 
 
 def list_projects() -> list[dict[str, Any]]:
@@ -120,6 +122,7 @@ def list_projects() -> list[dict[str, Any]]:
         out.append(
             {
                 "project_id": st.get("project_id"),
+                "name": st.get("name") or "Nuovo progetto",
                 "media_count": len(st.get("media", [])),
                 "has_audio": bool((st.get("audio") or {}).get("path")),
                 "has_render": manifest.get("status") == "done",
