@@ -250,6 +250,9 @@ async def run(project_state: dict) -> dict:
     script_path.write_text(script, encoding="utf-8")
 
     out_path = str(state_store.output_dir(project_state["project_id"]) / "final.mp4")
+    # FFmpeg 8.x non espone più `-filter_complex_script` in alcune build.
+    # Passiamo direttamente il graph come argomento a `-filter_complex`: subprocess
+    # invia gli argomenti senza shell, quindi newline e caratteri speciali sono sicuri.
     args: list[str] = ["ffmpeg", "-y", "-sws_flags", SWS_FLAGS]
     for inp in inputs:
         if inp["kind"] == "audio":
@@ -258,7 +261,7 @@ async def run(project_state: dict) -> dict:
             args += ["-loop", "1", "-framerate", str(fps), "-i", inp["path"]]
         else:
             args += ["-i", inp["path"]]
-    args += ["-filter_complex_script", str(script_path), "-map", "[vout]"]
+    args += ["-filter_complex", script, "-map", "[vout]"]
     if audio_block:
         args += ["-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]
     args += ["-c:v", VCODEC_MAP[vcodec], "-preset", ENCODE_PRESET, "-crf", str(CRF_MAP[vcodec]),
@@ -268,22 +271,17 @@ async def run(project_state: dict) -> dict:
 
     project_state["render_manifest"] = {
         "version": MANIFEST_VERSION,
-        "output": {"path": out_path, "resolution": f"{w}x{h}", "fps": fps,
-                    "vcodec": vcodec, "preset": ENCODE_PRESET, "crf": CRF_MAP[vcodec],
-                    "audio_codec": "aac" if audio_block else None},
-        "inputs": inputs,
+        "args": args,
+        "output": {"path": out_path, "size_bytes": 0},
+        "total_sec": total,
+        "fps": fps,
+        "resolution": f"{w}x{h}",
+        "vcodec": vcodec,
         "segments": segments,
         "transitions": transitions,
-        "filter_complex": script,
-        "filter_complex_script": str(script_path),
-        "args": args,
-        "total_sec": total,
         "audio": audio_block,
+        "filter_complex_script": str(script_path),
+        "status": "ready",
     }
-    project_state["edl"] = {
-        "clips": edl,
-        "transition_sec": float(edl[1]["transition_in"]) if len(edl) > 1 else 0.0,
-        "total_duration_sec": total,
-        "ffmpeg_concat_cmd": " ".join(args),
-    }
+    project_state["edl"] = edl
     return project_state
