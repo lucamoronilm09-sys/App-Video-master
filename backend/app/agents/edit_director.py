@@ -9,11 +9,11 @@ TRANS_MIN_SEC = 0.6
 TRANS_MAX_SEC = 1.0
 ZOOM_MAX = 1.15
 PAN_MAX_FRAC = 0.12
-PHOTO_ADJUSTED_MIN_SEC = 3.0
-PHOTO_ADJUSTED_MAX_SEC = 8.0
-PHOTO_DEFAULT_SEC = 4.8
+PHOTO_ADJUSTED_MIN_SEC = 2.5
+PHOTO_ADJUSTED_MAX_SEC = 5.5
+PHOTO_DEFAULT_SEC = 4.0
 BEAT_TOL_SEC = 0.8
-NUDGE_MAX_SEC = 0.4
+NUDGE_MAX_SEC = 0.35
 MOVEMENTS = ("pan_left", "pan_right", "zoom_in_slow", "zoom_out_slow", "pan_and_zoom_diag")
 
 
@@ -22,27 +22,29 @@ def _rng(project_id: str) -> random.Random:
 
 
 def _photo_score(item: dict[str, Any]) -> float:
-    composition = max(0.0, min(1.0, float(item.get("composition_score") or 0.5)))
-    detail = max(0.0, min(1.0, float(item.get("detail_score") or composition)))
-    sharpness = max(0.0, min(1.0, float(item.get("sharpness_score") or 0.5)))
-    contrast = max(0.0, min(1.0, float(item.get("contrast_score") or 0.5)))
-    color = max(0.0, min(1.0, float(item.get("color_score") or 0.5)))
-    faces = max(0, int(item.get("face_count") or 0))
+    def sf(key: str, default: float) -> float:
+        try:
+            return max(0.0, min(1.0, float(item.get(key) if item.get(key) is not None else default)))
+        except (TypeError, ValueError):
+            return default
+
+    composition = sf("composition_score", 0.5)
+    detail = sf("detail_score", composition)
+    sharpness = sf("sharpness_score", 0.5)
+    contrast = sf("contrast_score", 0.5)
+    color = sf("color_score", 0.5)
+    try:
+        faces = max(0, int(item.get("face_count") or 0))
+    except (TypeError, ValueError):
+        faces = 0
     face_score = min(1.0, (faces ** 0.5) / 2.8)
-    return max(0.0, min(1.0, (
-        0.28 * composition
-        + 0.24 * detail
-        + 0.16 * sharpness
-        + 0.12 * contrast
-        + 0.08 * color
-        + 0.12 * face_score
-    )))
+    return max(0.0, min(1.0, 0.28 * composition + 0.24 * detail + 0.16 * sharpness + 0.12 * contrast + 0.08 * color + 0.12 * face_score))
 
 
 def _effective_duration(item: dict[str, Any]) -> float:
     if item.get("type") == "photo":
         dur = float(item.get("duration_sec") or 0.0)
-        return dur if dur > 0 else PHOTO_DEFAULT_SEC
+        return max(PHOTO_ADJUSTED_MIN_SEC, min(PHOTO_ADJUSTED_MAX_SEC, dur if dur > 0 else PHOTO_DEFAULT_SEC))
     ts, te = item.get("trim_start_sec"), item.get("trim_end_sec")
     if ts is not None and te is not None:
         return max(0.5, float(te) - float(ts))
@@ -52,21 +54,16 @@ def _effective_duration(item: dict[str, Any]) -> float:
 def _ken_burns_params(movement: str, rng: random.Random) -> dict[str, Any]:
     if movement == "zoom_in_slow":
         zt = round(rng.uniform(1.08, ZOOM_MAX), 3)
-        return {"movement": movement, "zoom_from": 1.0, "zoom_to": zt,
-                "pan_x_from": 0.5, "pan_x_to": 0.5, "pan_y_from": 0.5, "pan_y_to": 0.5}
+        return {"movement": movement, "zoom_from": 1.0, "zoom_to": zt, "pan_x_from": 0.5, "pan_x_to": 0.5, "pan_y_from": 0.5, "pan_y_to": 0.5}
     if movement == "zoom_out_slow":
         zf = round(rng.uniform(1.08, ZOOM_MAX), 3)
-        return {"movement": movement, "zoom_from": zf, "zoom_to": 1.0,
-                "pan_x_from": 0.5, "pan_x_to": 0.5, "pan_y_from": 0.5, "pan_y_to": 0.5}
+        return {"movement": movement, "zoom_from": zf, "zoom_to": 1.0, "pan_x_from": 0.5, "pan_x_to": 0.5, "pan_y_from": 0.5, "pan_y_to": 0.5}
     if movement in ("pan_left", "pan_right"):
         x = (1.0, 0.0) if movement == "pan_left" else (0.0, 1.0)
-        return {"movement": movement, "zoom_from": 1.1, "zoom_to": 1.1,
-                "pan_x_from": x[0], "pan_x_to": x[1], "pan_y_from": 0.5, "pan_y_to": 0.5}
+        return {"movement": movement, "zoom_from": 1.1, "zoom_to": 1.1, "pan_x_from": x[0], "pan_x_to": x[1], "pan_y_from": 0.5, "pan_y_to": 0.5}
     xa = (0.0, 1.0) if rng.random() < 0.5 else (1.0, 0.0)
     ya = (0.0, 1.0) if rng.random() < 0.5 else (1.0, 0.0)
-    return {"movement": movement, "zoom_from": 1.0, "zoom_to": 1.12,
-            "pan_x_from": xa[0], "pan_x_to": xa[1],
-            "pan_y_from": ya[0], "pan_y_to": ya[1]}
+    return {"movement": movement, "zoom_from": 1.0, "zoom_to": 1.12, "pan_x_from": xa[0], "pan_x_to": xa[1], "pan_y_from": ya[0], "pan_y_to": ya[1]}
 
 
 def _movement_cycle(n_photos: int, rng: random.Random) -> list[str]:
@@ -88,21 +85,14 @@ def _nearest_marker(markers: list[float], t: float, tol: float) -> float | None:
 
 
 def _fit_to_target(durations: list[float], media: list[dict[str, Any]], target_total: float, gaps: list[float]) -> list[float]:
-    """Adatta il totale richiesto preservando le differenze tra le foto.
-
-    Il tempo viene tolto prima alle foto meno importanti e aggiunto prima alle
-    foto più importanti. Non forza tutte le immagini a una durata uniforme.
-    """
     out = list(durations)
     photo_indices = [i for i, m in enumerate(media) if m.get("type") == "photo"]
     if not photo_indices:
         return out
-
     current = sum(out) - sum(gaps)
     diff = round(float(target_total) - current, 2)
     if abs(diff) < 0.01:
         return out
-
     ranked = sorted(photo_indices, key=lambda i: _photo_score(media[i]), reverse=(diff > 0))
     remaining = abs(diff)
     for i in ranked:
@@ -157,12 +147,6 @@ async def run(project_state: dict) -> dict:
                 level = 0.5
             g = round(max(TRANS_MIN_SEC, min(TRANS_MAX_SEC, gaps[i] * (1.10 - 0.20 * level))), 2)
             tuned.append(g)
-        for i in range(1, len(tuned)):
-            if tuned[i] == tuned[i - 1]:
-                step = 0.05 if tuned[i] < TRANS_MAX_SEC else -0.05
-                cand = round(tuned[i] + step, 2)
-                if TRANS_MIN_SEC <= cand <= TRANS_MAX_SEC:
-                    tuned[i] = cand
         gaps = tuned
 
     markers = sorted(float(x) for x in (project_state.get("audio") or {}).get("beat_markers_sec", []))
@@ -185,6 +169,10 @@ async def run(project_state: dict) -> dict:
     for hint in project_state.get("qa_feedback", []) or []:
         if hint.get("type") == "fit_total" and hint.get("total_sec"):
             durations = _fit_to_target(durations, media, float(hint["total_sec"]), gaps)
+
+    for i, is_p in enumerate(is_photo):
+        if is_p:
+            durations[i] = round(max(PHOTO_ADJUSTED_MIN_SEC, min(PHOTO_ADJUSTED_MAX_SEC, durations[i])), 2)
 
     starts = starts_for(durations)
     movements = _movement_cycle(sum(is_photo), rng)
