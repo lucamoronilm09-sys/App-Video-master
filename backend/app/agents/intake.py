@@ -22,11 +22,13 @@ except ImportError:
 from app.services.media_inspect import inspect_media
 
 
-def _photo_content_features(path: Path) -> tuple[int, float]:
-    """Stima volti e complessità visiva su una copia ridotta della foto.
+def _photo_content_features(path: Path) -> tuple[int, float, float]:
+    """Stima volti, complessità visiva e dettaglio su una copia ridotta della foto.
 
     Se OpenCV non è disponibile, usa un fallback Pillow-only invece del valore
     fisso 0.5: in questo modo le foto non ricevono tutte la stessa durata.
+    
+    Ritorna: (face_count, composition_score, detail_score)
     """
     try:
         with Image.open(path) as im:
@@ -50,7 +52,11 @@ def _photo_content_features(path: Path) -> tuple[int, float]:
                     0.0,
                     min(1.0, 0.55 * (entropy / 6.0) + 0.45 * min(1.0, edge_density * 5.0)),
                 )
-                return int(len(faces)), round(complexity, 3)
+                # detail_score basato sulla densità dei bordi e entropia locale
+                laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+                detail_variance = laplacian.var()
+                detail_score = max(0.0, min(1.0, math.sqrt(detail_variance) / 50.0))
+                return int(len(faces)), round(complexity, 3), round(detail_score, 3)
 
             # Fallback robusto senza OpenCV: entropia dell'istogramma + varianza.
             gray = ImageOps.grayscale(im)
@@ -61,17 +67,32 @@ def _photo_content_features(path: Path) -> tuple[int, float]:
             variance_score = min(1.0, math.sqrt(max(0.0, variance)) / 80.0)
             entropy_score = min(1.0, entropy / 7.5)
             complexity = max(0.0, min(1.0, 0.65 * entropy_score + 0.35 * variance_score))
-            return 0, round(complexity, 3)
+            
+            # detail_score dal contrasto locale (differenza pixel adiacenti)
+            pixels = list(gray.getdata())
+            width = gray.width
+            local_contrasts = []
+            for y in range(min(gray.height - 1, 50)):
+                for x in range(min(width - 1, 50)):
+                    idx = y * width + x
+                    p1 = pixels[idx]
+                    p2 = pixels[idx + 1]
+                    p3 = pixels[idx + width]
+                    local_contrasts.append(abs(p2 - p1))
+                    local_contrasts.append(abs(p3 - p1))
+            avg_contrast = sum(local_contrasts) / len(local_contrasts) if local_contrasts else 0
+            detail_score = min(1.0, avg_contrast / 60.0)
+            return 0, round(complexity, 3), round(detail_score, 3)
     except Exception:
-        return 0, 0.5
+        return 0, 0.5, 0.5
 
 
 async def _process_one(path: Path, source: str, drive_file_id: str | None) -> dict | None:
     try:
         meta = await inspect_media(path)
-        face_count, composition_score = (0, 0.5)
+        face_count, composition_score, detail_score = (0, 0.5, 0.5)
         if meta["type"] == "photo":
-            face_count, composition_score = await asyncio.to_thread(_photo_content_features, path)
+            face_count, composition_score, detail_score = await asyncio.to_thread(_photo_content_features, path)
         return {
             "id": uuid.uuid4().hex[:12],
             "source": source,
@@ -85,6 +106,7 @@ async def _process_one(path: Path, source: str, drive_file_id: str | None) -> di
             "source_fps": meta.get("source_fps"),
             "face_count": face_count,
             "composition_score": composition_score,
+            "detail_score": detail_score,
             "order_index": 0,
         }
     except Exception as exc:

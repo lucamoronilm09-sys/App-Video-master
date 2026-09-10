@@ -146,9 +146,10 @@ def _run_checked(args: list[str], description: str) -> None:
         raise RuntimeError(f"{description}: ffmpeg exit={proc.returncode}: {detail}")
 
 
-def _segment_input_args(kind: str, path: str, fps: int) -> list[str]:
+def _segment_input_args(kind: str, path: str, fps: int, duration: float = 0.0) -> list[str]:
     if kind == "photo":
-        return ["-loop", "1", "-framerate", str(fps), "-i", path]
+        # Usiamo tpad nel filter graph invece di -loop per evitare incompatibilità con HEIC/HEVC
+        return ["-framerate", str(fps), "-i", path]
     return ["-i", path]
 
 
@@ -163,8 +164,9 @@ def _encode_segment(
 ) -> None:
     index = int(segment["input_index"])
     graph = _extract_segment_filter(script_path, index)
+    duration = float(segment.get("duration_sec", 0.0))
     args = ["ffmpeg", "-y", "-sws_flags", "lanczos+accurate_rnd+full_chroma_int"]
-    args += _segment_input_args(str(segment["kind"]), input_path, fps)
+    args += _segment_input_args(str(segment["kind"]), input_path, fps, duration)
     args += [
         "-filter_complex", graph,
         "-map", "[vout]",
