@@ -322,7 +322,7 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
       <div className="mt-4 flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-950/40 p-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-xs text-slate-500">
           <p>{selectedFiles.length} file selezionati · {selectedFolders.length} cartelle</p>
-          <p className="mt-1">L'import aggiunge i file al progetto esistente senza rimuovere quelli locali.</p>
+          <p className="mt-1">L&apos;import aggiunge i file al progetto esistente senza rimuovere quelli locali.</p>
         </div>
         <button type="button" disabled={importing || (!selectedFiles.length && !selectedFolders.length)} onClick={handleImport} className="shrink-0 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50">
           {importing ? "Import in corso…" : "Importa selezionati"}
