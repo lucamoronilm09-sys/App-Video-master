@@ -9,9 +9,9 @@ TRANS_MIN_SEC = 0.6
 TRANS_MAX_SEC = 1.0
 ZOOM_MAX = 1.15
 PAN_MAX_FRAC = 0.12
-PHOTO_ADJUSTED_MIN_SEC = 2.5
-PHOTO_ADJUSTED_MAX_SEC = 6.0
-PHOTO_DEFAULT_SEC = 4.5
+PHOTO_ADJUSTED_MIN_SEC = 3.0
+PHOTO_ADJUSTED_MAX_SEC = 8.0
+PHOTO_DEFAULT_SEC = 4.8
 BEAT_TOL_SEC = 0.8
 NUDGE_MAX_SEC = 0.4
 MOVEMENTS = ("pan_left", "pan_right", "zoom_in_slow", "zoom_out_slow", "pan_and_zoom_diag")
@@ -19,6 +19,24 @@ MOVEMENTS = ("pan_left", "pan_right", "zoom_in_slow", "zoom_out_slow", "pan_and_
 
 def _rng(project_id: str) -> random.Random:
     return random.Random(hashlib.sha256(project_id.encode("utf-8")).digest())
+
+
+def _photo_score(item: dict[str, Any]) -> float:
+    composition = max(0.0, min(1.0, float(item.get("composition_score") or 0.5)))
+    detail = max(0.0, min(1.0, float(item.get("detail_score") or composition)))
+    sharpness = max(0.0, min(1.0, float(item.get("sharpness_score") or 0.5)))
+    contrast = max(0.0, min(1.0, float(item.get("contrast_score") or 0.5)))
+    color = max(0.0, min(1.0, float(item.get("color_score") or 0.5)))
+    faces = max(0, int(item.get("face_count") or 0))
+    face_score = min(1.0, (faces ** 0.5) / 2.8)
+    return max(0.0, min(1.0, (
+        0.28 * composition
+        + 0.24 * detail
+        + 0.16 * sharpness
+        + 0.12 * contrast
+        + 0.08 * color
+        + 0.12 * face_score
+    )))
 
 
 def _effective_duration(item: dict[str, Any]) -> float:
@@ -69,35 +87,36 @@ def _nearest_marker(markers: list[float], t: float, tol: float) -> float | None:
     return best
 
 
-def _distribute_diff(durations: list[float], photo_idx: list[int], diff: float) -> list[float]:
-    """Distribuisce diff sulle foto rispettando i limiti individuali.
+def _fit_to_target(durations: list[float], media: list[dict[str, Any]], target_total: float, gaps: list[float]) -> list[float]:
+    """Adatta il totale richiesto preservando le differenze tra le foto.
 
-    Usa la capacità residua di ogni foto, così una singola foto già a 6s non
-    assorbe una quota che dovrebbe spettare alle altre.
+    Il tempo viene tolto prima alle foto meno importanti e aggiunto prima alle
+    foto più importanti. Non forza tutte le immagini a una durata uniforme.
     """
     out = list(durations)
-    remaining = float(diff)
-    if not photo_idx or abs(remaining) < 1e-9:
+    photo_indices = [i for i, m in enumerate(media) if m.get("type") == "photo"]
+    if not photo_indices:
         return out
-    for _ in range(4):
-        active = [i for i in photo_idx if (
-            remaining > 0 and out[i] < PHOTO_ADJUSTED_MAX_SEC - 1e-9
-        ) or (
-            remaining < 0 and out[i] > PHOTO_ADJUSTED_MIN_SEC + 1e-9
-        )]
-        if not active:
+
+    current = sum(out) - sum(gaps)
+    diff = round(float(target_total) - current, 2)
+    if abs(diff) < 0.01:
+        return out
+
+    ranked = sorted(photo_indices, key=lambda i: _photo_score(media[i]), reverse=(diff > 0))
+    remaining = abs(diff)
+    for i in ranked:
+        if remaining <= 0.01:
             break
-        share = remaining / len(active)
-        moved = 0.0
-        for i in active:
-            old = out[i]
-            target = old + share
-            new = max(PHOTO_ADJUSTED_MIN_SEC, min(PHOTO_ADJUSTED_MAX_SEC, target))
-            out[i] = round(new, 2)
-            moved += new - old
-        remaining -= moved
-        if abs(remaining) < 0.005:
-            break
+        if diff > 0:
+            capacity = max(0.0, PHOTO_ADJUSTED_MAX_SEC - out[i])
+            change = min(capacity, remaining)
+            out[i] = round(out[i] + change, 2)
+        else:
+            capacity = max(0.0, out[i] - PHOTO_ADJUSTED_MIN_SEC)
+            change = min(capacity, remaining)
+            out[i] = round(out[i] - change, 2)
+        remaining -= change
     return out
 
 
@@ -160,16 +179,12 @@ async def run(project_state: dict) -> dict:
                 starts = starts_for(durations)
 
     audio_dur = float((project_state.get("audio") or {}).get("duration_sec") or 0.0)
-    photo_idx = [i for i, p in enumerate(is_photo) if p]
-    if audio_dur > 0 and photo_idx:
-        durations = _distribute_diff(durations, photo_idx, audio_dur - _timeline_total(durations, gaps))
+    if audio_dur > 0:
+        durations = _fit_to_target(durations, media, audio_dur, gaps)
 
     for hint in project_state.get("qa_feedback", []) or []:
         if hint.get("type") == "fit_total" and hint.get("total_sec"):
-            durations = _distribute_diff(
-                durations, photo_idx,
-                float(hint["total_sec"]) - _timeline_total(durations, gaps),
-            )
+            durations = _fit_to_target(durations, media, float(hint["total_sec"]), gaps)
 
     starts = starts_for(durations)
     movements = _movement_cycle(sum(is_photo), rng)
