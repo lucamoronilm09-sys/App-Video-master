@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
-from app.agents.editor_intelligence import prompt_preferences
-from app.services.editor_intelligence import music_structure, story_chapters
+from app.services.editor_intelligence import music_structure, prompt_preferences, story_chapters
 
 
 def test_prompt_preferences_detects_user_intent() -> None:
