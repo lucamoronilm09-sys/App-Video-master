@@ -13,7 +13,7 @@ from app.pipeline import state as state_store
 TRANS_MANUAL_MAX_SEC = 1.5
 ZOOM_MAX = 1.15
 PAN_MAX_FRAC = 0.12
-MANIFEST_VERSION = 3
+MANIFEST_VERSION = 4
 VCODEC_MAP = {"h264": "libx264", "h265": "libx265"}
 CRF_MAP = {"h264": 18, "h265": 20}
 ENCODE_PRESET = "medium"
@@ -74,7 +74,9 @@ def _zoompan(kb: dict[str, Any], frames: int, w: int, h: int, fps: int) -> str:
         a, b = float(kb[f"{name}_from"]), float(kb[f"{name}_to"])
         if a == b:
             return f"(iw-iw/zoom)*{a}"
-        return f"(iw-iw/zoom)*({a}+({b}-{a})*on/{frames - 1})" if frames > 1 else f"(iw-iw/zoom)*{b}"
+        if frames <= 1:
+            return f"(iw-iw/zoom)*{b}"
+        return f"(iw-iw/zoom)*({a}+({b}-{a})*on/{frames - 1})"
 
     return f"zoompan=z='{z}':x='{axis('pan_x')}':y='{axis('pan_y')}':d={frames}:s={w}x{h}:fps={fps}"
 
@@ -146,25 +148,30 @@ async def run(project_state: dict) -> dict:
             m_w = max(1, int(media.get("width") or w))
             m_h = max(1, int(media.get("height") or h))
             portrait = (media.get("orientation") == "portrait") or m_h > m_w
+            # IMPORTANT: zoompan must receive exactly ONE source frame.
+            # The old graph fed it an infinite `-loop 1` stream, so d=frames
+            # was multiplied for every source frame and could keep FFmpeg at 99%
+            # for an effectively unbounded render.
             if portrait:
                 fw2 = _even(round(2 * h * m_w / m_h))
                 fw1 = _even(round(h * m_w / m_h))
-                filters.append(f"[{i}:v]split=2[pbg{i}][pfg{i}]")
+                filters.append(f"[{i}:v]trim=end_frame=1,setpts=PTS-STARTPTS,split=2[pbg{i}][pfg{i}]")
                 filters.append(
                     f"[pbg{i}]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
                     f"gblur=sigma=40,eq=brightness=-0.25,loop=loop=-1:size=1,"
                     f"trim=end_frame={frames},setpts=N/{fps}/TB,fps={fps}[bg{i}]"
                 )
                 filters.append(
-                    f"[pfg{i}]scale={fw2}:{2*h}, {_zoompan(entry['ken_burns'], frames, fw2, 2*h, fps)},"
+                    f"[pfg{i}]scale={fw2}:{2*h},{_zoompan(entry['ken_burns'], frames, fw2, 2*h, fps)},"
                     f"scale={fw1}:{h},{PHOTO_UNSHARP},setpts=PTS-STARTPTS[fg{i}]"
                 )
                 filters.append(f"[bg{i}][fg{i}]overlay=(W-w)/2:(H-h)/2,{_tail(fps)}[v{i}]")
                 fit = "contain"
             else:
                 filters.append(
-                    f"[{i}:v]scale={2*w}:{2*h}:force_original_aspect_ratio=increase,"
-                    f"crop={2*w}:{2*h},{_zoompan(entry['ken_burns'], frames, 2*w, 2*h, fps)},"
+                    f"[{i}:v]trim=end_frame=1,setpts=PTS-STARTPTS,"
+                    f"scale={2*w}:{2*h}:force_original_aspect_ratio=increase,crop={2*w}:{2*h},"
+                    f"{_zoompan(entry['ken_burns'], frames, 2*w, 2*h, fps)},"
                     f"scale={w}:{h},{PHOTO_UNSHARP},setpts=PTS-STARTPTS,{_tail(fps)}[v{i}]"
                 )
                 fit = "cover"
@@ -189,7 +196,6 @@ async def run(project_state: dict) -> dict:
                              "fit": fit, "label": f"v{i}", "filter": filters[-1],
                              "duration_sec": actual_duration})
 
-    # Build the final video chain. `acc` is always the current output duration.
     transitions: list[dict[str, Any]] = []
     current = "v0"
     acc = durations[0]
@@ -223,7 +229,6 @@ async def run(project_state: dict) -> dict:
         if legacy.get("path"):
             tracks = [legacy]
     audio_block = None
-    audio_inputs: list[int] = []
     if tracks:
         labels: list[str] = []
         for ti, track in enumerate(tracks):
@@ -231,7 +236,6 @@ async def run(project_state: dict) -> dict:
             if not audio_path or not Path(audio_path).is_file():
                 raise ValueError(f"file audio mancante su disco: {audio_path}")
             idx = len(inputs)
-            audio_inputs.append(idx)
             inputs.append({"index": idx, "path": str(audio_path), "kind": "audio", "audio_track": ti})
             lab = f"aud{ti}"
             filters.append(f"[{idx}:a]aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[{lab}]")
@@ -241,8 +245,8 @@ async def run(project_state: dict) -> dict:
         else:
             filters.append("".join(labels) + f"concat=n={len(labels)}:v=0:a=1[playlist]")
             source = "[playlist]"
-        # The final map MUST use the label actually emitted below (`aout`).
-        filters.append(f"{source}aloop=loop=-1:size=2147483647,atrim=duration={total},asetpts=PTS-STARTPTS,afade=t=in:d=0.5,afade=t=out:st={max(0.0, total - 1.0):.3f}:d=1[aout]")
+        fade_out_start = max(0.0, total - 1.0)
+        filters.append(f"{source}aloop=loop=-1:size=2147483647,atrim=duration={total},asetpts=PTS-STARTPTS,afade=t=in:d=0.5,afade=t=out:st={fade_out_start:.3f}:d=1[aout]")
         audio_block = {"tracks": [{"path": t.get("path"), "name": t.get("name"), "duration_sec": t.get("duration_sec", 0)} for t in tracks]}
 
     script = ";\n".join(filters)
@@ -251,13 +255,10 @@ async def run(project_state: dict) -> dict:
     for inp in inputs:
         if inp["kind"] == "audio":
             args += ["-i", inp["path"]]
+        elif inp["kind"] == "photo":
+            args += ["-loop", "1", "-framerate", str(fps), "-i", inp["path"]]
         else:
-            # Still images are made infinite at input level; the filter graph
-            # clamps them to the exact number of output frames.
-            if inp["kind"] == "photo":
-                args += ["-loop", "1", "-framerate", str(fps), "-i", inp["path"]]
-            else:
-                args += ["-i", inp["path"]]
+            args += ["-i", inp["path"]]
     args += ["-filter_complex", script, "-map", "[vout]"]
     if audio_block:
         args += ["-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]
