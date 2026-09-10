@@ -258,8 +258,9 @@ async def run(project_state: dict) -> dict:
         if inp["kind"] == "audio":
             args += ["-i", inp["path"]]
         elif inp["kind"] == "photo":
-            # Usiamo tpad nel filter graph invece di -loop per evitare incompatibilità con HEIC/HEVC
-            args += ["-framerate", str(fps), "-i", inp["path"]]
+            # Per HEIC/HEIF e altre immagini statiche, usiamo -t per specificare la durata
+            # invece di -framerate che può causare errori con alcuni codec immagine
+            args += ["-i", inp["path"], "-t", str(durations[inp["index"]])]
         else:
             args += ["-i", inp["path"]]
     args += ["-filter_complex", script, "-map", "[vout]"]
