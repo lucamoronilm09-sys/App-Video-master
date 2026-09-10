@@ -57,7 +57,11 @@ async def replace_media(project_id: str, media_id: str, file: UploadFile = File(
     old_path = Path(str(target.get("path"))) if target.get("path") else None
     new_path, _ = await _prepare_uploaded_media(project_id, file)
 
-    staging = [{"path": str(new_path), "source": target.get("source", "local"), "drive_file_id": target.get("drive_file_id")}]
+    staging = [{
+        "path": str(new_path),
+        "source": "local",
+        "drive_file_id": None,
+    }]
     analysed = await intake._process_one(new_path, staging[0]["source"], staging[0]["drive_file_id"])
     if not analysed or "error" in analysed:
         new_path.unlink(missing_ok=True)
@@ -69,19 +73,9 @@ async def replace_media(project_id: str, media_id: str, file: UploadFile = File(
     analysed["order_index"] = int(target.get("order_index", target_index))
     state["media"][target_index] = analysed
 
-    # Gli override possono avere durate/movimenti riferiti al vecchio contenuto:
-    # la durata manuale e il movimento restano solo se compatibili.
-    override = state.setdefault("clip_overrides", {}).get(media_id, {})
-    if analysed.get("type") != "photo":
-        override.pop("ken_burns", None)
-    max_duration = float(analysed.get("duration_sec") or 0.0)
-    if analysed.get("type") == "video" and override.get("duration_sec") is not None:
-        override["duration_sec"] = min(float(override["duration_sec"]), max_duration)
-        if override["duration_sec"] < 0.5:
-            override.pop("duration_sec", None)
-    if not override:
-        state["clip_overrides"].pop(media_id, None)
-
+    # Il contenuto è nuovo: nessun override relativo al vecchio file deve essere
+    # ereditato, perché durata e tipo possono essere cambiati (foto <-> video).
+    state.setdefault("clip_overrides", {}).pop(media_id, None)
     state["edit_decision_list"] = []
     state["render_manifest"] = None
     state["qa_report"] = None
@@ -117,7 +111,12 @@ async def replace_media(project_id: str, media_id: str, file: UploadFile = File(
 
 @router.delete("/projects/{project_id}/media/{media_id}")
 def delete_media(project_id: str, media_id: str) -> dict:
-    """Elimina definitivamente una foto/video dal progetto."""
+    """Elimina definitivamente una foto/video dal progetto.
+
+    La rimozione invalida il montaggio e l'eventuale render precedente, perché
+    entrambi potrebbero contenere la clip eliminata. Vengono rimossi anche il
+    file originale e le anteprime cache associate.
+    """
     state = _get_state_or_404(project_id)
     media = state.get("media", [])
     target = next((m for m in media if m.get("id") == media_id), None)
