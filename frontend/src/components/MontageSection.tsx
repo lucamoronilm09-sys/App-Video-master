@@ -32,17 +32,15 @@ interface ClipRowProps {
   onReset: (mediaId: string) => Promise<void>;
 }
 
-/** Riga editabile di una clip: durata, dissolvenza in uscita, movimento. */
 function ClipRow({ entry, index, isLast, media, overridden, disabled, onPatch, onReset }: ClipRowProps) {
   const isPhoto = (media?.type ?? (entry.ken_burns ? "photo" : "video")) === "photo";
-  const durMin = isPhoto ? 2.5 : 0.5;
-  const durMax = isPhoto ? 5.5 : Math.max(0.5, media?.duration_sec ?? 8.0);
+  const durMin = isPhoto ? 3.0 : 0.5;
+  const durMax = isPhoto ? 8.0 : Math.max(0.5, media?.duration_sec ?? 8.0);
   const [durText, setDurText] = useState(entry.duration_sec.toFixed(1));
   const [trans, setTrans] = useState(entry.transition_out);
   const [rowError, setRowError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Riallinea i controlli quando il piano cambia da fuori (Rigenera, altra clip).
   useEffect(() => {
     setDurText(entry.duration_sec.toFixed(1));
     setTrans(entry.transition_out);
@@ -83,7 +81,7 @@ function ClipRow({ entry, index, isLast, media, overridden, disabled, onPatch, o
       <div className="flex items-center gap-2 text-xs text-slate-300">
         <span className="font-bold text-slate-400">#{index + 1}</span>
         <span className="tabular-nums text-slate-500">⏱ {entry.start_sec_in_final_video.toFixed(1)}s</span>
-        <label className="flex items-center gap-1 tabular-nums" title={isPhoto ? "Durata foto (2.5–5.5s)" : `Durata video (0.5–${durMax.toFixed(1)}s, ricentra il taglio)`}>
+        <label className="flex items-center gap-1 tabular-nums" title={isPhoto ? "Durata foto (3–8s)" : `Durata video (0.5–${durMax.toFixed(1)}s, ricentra il taglio)`}>
           <input
             type="number"
             value={durText}
@@ -170,7 +168,6 @@ function ClipRow({ entry, index, isLast, media, overridden, disabled, onPatch, o
   );
 }
 
-/** M4 + modifiche manuali: genera il piano e permette di ritoccare ogni clip. */
 export function MontageSection({ project, onGenerate, onPatchClip, onResetClip, busy }: MontageSectionProps) {
   const [error, setError] = useState<string | null>(null);
   const edl = project.edit_decision_list ?? [];
@@ -190,9 +187,7 @@ export function MontageSection({ project, onGenerate, onPatchClip, onResetClip, 
   return (
     <section aria-label="Piano di montaggio" className="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
-          Montaggio
-        </h3>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">Montaggio</h3>
         <button
           type="button"
           disabled={busy || project.media.length === 0}
@@ -203,44 +198,24 @@ export function MontageSection({ project, onGenerate, onPatchClip, onResetClip, 
         </button>
       </div>
 
-      {error && (
-        <p className="mb-3 rounded-lg border border-rose-800 bg-rose-900/30 px-3 py-2 text-sm text-rose-200">
-          {error}
-        </p>
-      )}
+      {error && <p className="mb-3 rounded-lg border border-rose-800 bg-rose-900/30 px-3 py-2 text-sm text-rose-200">{error}</p>}
 
-      {edl.length === 0 && !error && (
-        <p className="text-sm text-slate-500">
-          Il regista IA deciderà Ken Burns, dissolvenze e sincronizzazione sulla musica.
-        </p>
-      )}
+      {edl.length === 0 && !error && <p className="text-sm text-slate-500">Il regista IA deciderà Ken Burns, dissolvenze e sincronizzazione sulla musica.</p>}
 
       {edl.length > 0 && (
         <div className="space-y-3">
           <p className="text-sm text-slate-300">
-            {edl.length} clip · totale{" "}
-            <strong>{manifest?.total_sec ? manifest.total_sec.toFixed(1) : "…"}s</strong>
+            {edl.length} clip · totale <strong>{manifest?.total_sec ? manifest.total_sec.toFixed(1) : "…"}s</strong>
             {manifest?.audio ? " · con audio" : " · senza audio"}
           </p>
           <ol className="space-y-1">
             {edl.map((e, i) => (
-              <ClipRow
-                key={e.media_id}
-                entry={e}
-                index={i}
-                isLast={i === edl.length - 1}
-                media={mediaById.get(e.media_id)}
-                overridden={!!overrides[e.media_id]}
-                disabled={!!busy}
-                onPatch={onPatchClip}
-                onReset={onResetClip}
-              />
+              <ClipRow key={e.media_id} entry={e} index={i} isLast={i === edl.length - 1} media={mediaById.get(e.media_id)} overridden={!!overrides[e.media_id]} disabled={!!busy} onPatch={onPatchClip} onReset={onResetClip} />
             ))}
           </ol>
           <p className="text-[11px] leading-relaxed text-slate-500">
             ✏️ Tocca durata, dissolvenza (0 = stacco) o movimento per ritoccare ogni clip.
-            Le clip <span className="text-sky-300">manuali</span> restano bloccate anche dopo
-            “Rigenera”. Dopo ogni modifica riesporta il video per vederla nel risultato.
+            Le foto vengono valutate automaticamente tra 3 e 8 secondi; le clip <span className="text-sky-300">manuali</span> restano bloccate anche dopo “Rigenera”. Dopo ogni modifica riesporta il video per vederla nel risultato.
           </p>
         </div>
       )}
