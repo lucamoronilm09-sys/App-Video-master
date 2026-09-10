@@ -97,6 +97,7 @@ class AudioTrack(BaseModel):
 class ProjectState(BaseModel):
     schema_version: int
     project_id: str
+    name: str = "Nuovo progetto"
     media: list[MediaItem] = Field(default_factory=list)
     audio: AudioBlock = Field(default_factory=AudioBlock)
     audio_tracks: list[AudioTrack] = Field(default_factory=list)
@@ -131,6 +132,10 @@ class UpdateSettingsRequest(BaseModel):
     resolution: Optional[str] = None
     fps: Optional[int] = None
     vcodec: Optional[Literal["h264", "h265"]] = None
+
+
+class UpdateProjectRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
 
 
 class DriveCredentialsRequest(BaseModel):
