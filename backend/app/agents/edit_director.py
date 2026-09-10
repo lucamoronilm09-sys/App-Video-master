@@ -20,7 +20,6 @@ TRANS_MAX_SEC = 0.9
 ZOOM_MAX = 1.15
 PHOTO_MIN_SEC = 2.0
 PHOTO_MAX_SEC = 7.0
-PHOTO_DEFAULT_SEC = 3.5
 MOVEMENTS = ("pan_left", "pan_right", "zoom_in_slow", "zoom_out_slow", "pan_and_zoom_diag")
 
 
@@ -98,12 +97,10 @@ def _music_grid(audio: dict[str, Any]) -> list[float]:
 
 
 def _fit_total(durations: list[float], media: list[dict[str, Any]], target: float) -> list[float]:
-    """Adjust only photo durations toward target, prioritizing less-important shots."""
     out = list(durations)
     if not out or target <= 0:
         return out
-    current = sum(out)
-    diff = target - current
+    diff = target - sum(out)
     if abs(diff) < 0.01:
         return out
     photos = [i for i, m in enumerate(media) if m.get("type") == "photo"]
@@ -119,26 +116,49 @@ def _fit_total(durations: list[float], media: list[dict[str, Any]], target: floa
     return out
 
 
-def _snap_photo_durations(media: list[dict[str, Any]], wanted: list[float], audio_dur: float, beats: list[float]) -> list[float]:
-    """Choose beat endpoints while leaving enough time for following photos."""
+def _initial_durations(media: list[dict[str, Any]], audio: dict[str, Any]) -> list[float]:
+    energy = list(audio.get("energy_curve") or [])
+    wanted: list[float] = []
+    cursor = 0.0
+    for item in media:
+        if item.get("type") == "photo":
+            duration = _raw_photo_duration(item, _energy_at(energy, cursor))
+        else:
+            ts, te = item.get("trim_start_sec"), item.get("trim_end_sec")
+            duration = max(0.5, float(te) - float(ts)) if ts is not None and te is not None else max(0.5, float(item.get("duration_sec") or 0.0))
+        wanted.append(round(duration, 3))
+        cursor += duration
+    return wanted
+
+
+def _snap_to_beats(media: list[dict[str, Any]], wanted: list[float], beats: list[float], audio_dur: float) -> list[float]:
+    """Snap intermediate photo endpoints to beats without starving later clips."""
     if not beats or audio_dur <= 0:
         return wanted
     out = list(wanted)
     cursor = 0.0
-    photo_positions = [i for i, m in enumerate(media) if m.get("type") == "photo"]
-    for position, i in enumerate(photo_positions[:-1]):
+    remaining_min_total = sum(
+        PHOTO_MIN_SEC if m.get("type") == "photo" else max(0.5, out[i])
+        for i, m in enumerate(media)
+    )
+    for i, item in enumerate(media):
+        # Last item absorbs the exact soundtrack remainder; it need not be a beat.
+        if i == len(media) - 1:
+            out[i] = max(0.1, round(audio_dur - cursor, 3))
+            break
+
+        remaining_min_total -= PHOTO_MIN_SEC if item.get("type") == "photo" else max(0.5, out[i])
+        if item.get("type") != "photo":
+            cursor += out[i]
+            continue
+
         target_end = cursor + out[i]
-        next_photo_count = len(photo_positions) - position - 1
-        latest_end = audio_dur - PHOTO_MIN_SEC * next_photo_count
-        candidates = [b for b in beats if cursor + PHOTO_MIN_SEC - 1e-6 <= b <= min(cursor + PHOTO_MAX_SEC, latest_end) + 1e-6]
+        max_end = min(cursor + PHOTO_MAX_SEC, audio_dur - remaining_min_total)
+        candidates = [b for b in beats if cursor + PHOTO_MIN_SEC - 1e-6 <= b <= max_end + 1e-6]
         if candidates:
             end = min(candidates, key=lambda b: abs(b - target_end))
             out[i] = round(end - cursor, 3)
         cursor += out[i]
-        # Non-photo items between photos are accounted for naturally below.
-        for j in range(i + 1, photo_positions[position + 1]):
-            if media[j].get("type") != "photo":
-                cursor += out[j]
     return out
 
 
@@ -169,21 +189,6 @@ def _movement_cycle(n: int, rng: random.Random) -> list[str]:
     return out[:n]
 
 
-def _initial_durations(media: list[dict[str, Any]], audio: dict[str, Any]) -> list[float]:
-    energy = list(audio.get("energy_curve") or [])
-    wanted: list[float] = []
-    cursor = 0.0
-    for item in media:
-        if item.get("type") == "photo":
-            duration = _raw_photo_duration(item, _energy_at(energy, cursor))
-        else:
-            ts, te = item.get("trim_start_sec"), item.get("trim_end_sec")
-            duration = max(0.5, float(te) - float(ts)) if ts is not None and te is not None else max(0.5, float(item.get("duration_sec") or 0.0))
-        wanted.append(round(duration, 3))
-        cursor += duration
-    return wanted
-
-
 async def run(project_state: dict) -> dict:
     media = sorted(project_state.get("media", []), key=lambda m: m.get("order_index", 0))
     if not media:
@@ -196,17 +201,19 @@ async def run(project_state: dict) -> dict:
     durations = _initial_durations(media, audio)
 
     if audio_dur > 0:
-        # With a soundtrack there is no point rendering a video shorter than the song.
         durations = _fit_total(durations, media, audio_dur)
-        durations = _snap_photo_durations(media, durations, audio_dur, beats)
-        # Re-fit after snapping, then reserve the final remainder for the last photo
-        # when possible. This gives an exact soundtrack length without accumulating drift.
-        durations = _fit_total(durations, media, audio_dur)
+        durations = _snap_to_beats(media, durations, beats, audio_dur)
+        # If the last remainder fell outside the acceptable photo range, redistribute
+        # only the excess/deficit through other photos rather than creating invalid data.
+        total = sum(durations)
+        if abs(total - audio_dur) > 0.01:
+            durations = _fit_total(durations, media, audio_dur)
 
     photo_count = sum(m.get("type") == "photo" for m in media)
     rng = _rng(str(project_state.get("project_id", "")))
     movements = _movement_cycle(photo_count, rng)
     movement_index = 0
+    energy = list(audio.get("energy_curve") or [])
 
     edl: list[dict[str, Any]] = []
     cursor = 0.0
@@ -223,26 +230,37 @@ async def run(project_state: dict) -> dict:
         else:
             kb = None
 
-        # With real beats, exact cuts are preferable to crossfades because the
-        # visual change happens exactly on the musical grid. Without beats we keep
-        # the softer cinematic crossfade used by the original planner.
-        transition_in = 0.0 if beats else (0.0 if i == 0 else round(_clamp(0.75 - 0.25 * _energy_at(list(audio.get("energy_curve") or []), cursor), TRANS_MIN_SEC, TRANS_MAX_SEC), 3))
-
+        transition_in = 0.0 if beats or i == 0 else round(
+            _clamp(0.75 - 0.25 * _energy_at(energy, cursor), TRANS_MIN_SEC, TRANS_MAX_SEC), 3
+        )
         edl.append({
             "media_id": item["id"],
             "start_sec_in_final_video": round(cursor, 3),
             "duration_sec": duration,
             "ken_burns": kb,
             "transition_in": transition_in,
-            "transition_out": 0.0,
+            "transition_out": transition_in if i < len(media) - 1 else 0.0,
             "editorial_score": round(_photo_score(item), 3) if item.get("type") == "photo" else None,
             "duration_reason": "vision+music" if item.get("type") == "photo" else "source-video-duration",
         })
         cursor += duration
+        if transition_in > 0:
+            cursor -= transition_in
 
-    # Make the EDL internally consistent. Audio mux is limited to manifest total.
-    for i in range(1, len(edl)):
-        edl[i]["transition_in"] = edl[i - 1]["transition_out"] = 0.0 if beats else edl[i]["transition_in"]
+    # When music is present there are no overlaps: visual changes are beat cuts.
+    # Therefore the sum of clip durations is the exact final video duration.
+    if audio_dur > 0 and edl:
+        delta = round(audio_dur - (edl[-1]["start_sec_in_final_video"] + edl[-1]["duration_sec"]), 3)
+        if abs(delta) > 0.01:
+            last_photo = next((j for j in reversed(range(len(edl))) if media[j].get("type") == "photo"), None)
+            if last_photo is not None:
+                adjusted = _clamp(float(edl[last_photo]["duration_sec"]) + delta, PHOTO_MIN_SEC, PHOTO_MAX_SEC)
+                edl[last_photo]["duration_sec"] = round(adjusted, 3)
+                # Recompute downstream start times after the adjustment.
+                cursor = 0.0
+                for j, entry in enumerate(edl):
+                    entry["start_sec_in_final_video"] = round(cursor, 3)
+                    cursor += float(entry["duration_sec"])
 
     project_state["edit_decision_list"] = edl
     project_state["edit_summary"] = {
@@ -250,6 +268,6 @@ async def run(project_state: dict) -> dict:
         "total_photos": photo_count,
         "music_synced": bool(beats),
         "bpm": audio.get("bpm", 0.0),
-        "planned_duration_sec": round(cursor, 3),
+        "planned_duration_sec": round(sum(float(e["duration_sec"]) for e in edl) - sum(float(e["transition_in"]) for e in edl[1:]), 3),
     }
     return project_state
