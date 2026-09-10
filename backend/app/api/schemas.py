@@ -28,6 +28,7 @@ class MediaItem(BaseModel):
     source_fps: Optional[float] = None
     face_count: int = 0
     composition_score: float = 0.5
+    detail_score: float = 0.5
 
 
 class OutputSpec(BaseModel):

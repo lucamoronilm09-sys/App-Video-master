@@ -154,8 +154,8 @@ async def run(project_state: dict) -> dict:
                 filters.append(f"[{i}:v]trim=end_frame=1,setpts=PTS-STARTPTS,split=2[pbg{i}][pfg{i}]")
                 filters.append(
                     f"[pbg{i}]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
-                    f"gblur=sigma=40,eq=brightness=-0.25,loop=loop=-1:size=1,"
-                    f"trim=end_frame={frames},setpts=N/{fps}/TB,fps={fps}[bg{i}]"
+                    f"gblur=sigma=40,eq=brightness=-0.25,tpad=start_mode=clone:start_duration={duration},"
+                    f"setpts=N/{fps}/TB,fps={fps}[bg{i}]"
                 )
                 filters.append(
                     f"[pfg{i}]scale={fw2}:{2*h},{_zoompan(entry['ken_burns'], frames, fw2, 2*h, fps)},"
@@ -168,7 +168,7 @@ async def run(project_state: dict) -> dict:
                     f"[{i}:v]trim=end_frame=1,setpts=PTS-STARTPTS,"
                     f"scale={2*w}:{2*h}:force_original_aspect_ratio=increase,crop={2*w}:{2*h},"
                     f"{_zoompan(entry['ken_burns'], frames, 2*w, 2*h, fps)},"
-                    f"scale={w}:{h},{PHOTO_UNSHARP},setpts=PTS-STARTPTS,{_tail(fps)}[v{i}]"
+                    f"scale={w}:{h},{PHOTO_UNSHARP},tpad=start_mode=clone:start_duration={duration},setpts=PTS-STARTPTS,{_tail(fps)}[v{i}]"
                 )
                 fit = "cover"
             segments.append({"media_id": entry["media_id"], "input_index": i, "kind": kind,
@@ -258,7 +258,8 @@ async def run(project_state: dict) -> dict:
         if inp["kind"] == "audio":
             args += ["-i", inp["path"]]
         elif inp["kind"] == "photo":
-            args += ["-loop", "1", "-framerate", str(fps), "-i", inp["path"]]
+            # Usiamo tpad nel filter graph invece di -loop per evitare incompatibilità con HEIC/HEVC
+            args += ["-framerate", str(fps), "-i", inp["path"]]
         else:
             args += ["-i", inp["path"]]
     args += ["-filter_complex", script, "-map", "[vout]"]
