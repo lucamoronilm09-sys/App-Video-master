@@ -209,8 +209,15 @@ async def run(project_state: dict) -> dict:
         else:
             kb = None
         
-        # Calcola transizione: prima clip sempre 0, altrimenti basata su energia
-        transition_in = 0.0 if i == 0 else round(_clamp(0.78 - 0.28 * _energy_at(energy, cursor), TRANS_MIN_SEC, TRANS_MAX_SEC), 3)
+        # Calcola transizione: prima clip sempre 0, altrimenti basata su energia o default
+        # Se non c'è audio (energy_curve vuota), usa un default di 0.8s per transizioni fluide
+        if i == 0:
+            transition_in = 0.0
+        elif not energy or len(energy) == 0:
+            # Nessun audio: usa transizione default fluida
+            transition_in = 0.8
+        else:
+            transition_in = round(_clamp(0.78 - 0.28 * _energy_at(energy, cursor), TRANS_MIN_SEC, TRANS_MAX_SEC), 3)
         
         edl_raw.append({
             "media_id": item["id"],

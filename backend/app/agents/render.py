@@ -214,5 +214,12 @@ async def run(project_state: dict) -> dict:
     try: validation = _validate_video(out_path, total_sec); _decode_probe(out_path)
     except Exception as exc:
         project_state.setdefault("errors", []).append({"stage": "render", "message": str(exc)}); raise
-    manifest["status"] = "done"; manifest["output"]["size_bytes"] = out_path.stat().st_size; manifest["output"]["rendered_at"] = time.time(); manifest["validation"] = validation
+    
+    # Aggiorna il manifest con i dati post-render
+    manifest["status"] = "done"
+    manifest["output"]["size_bytes"] = out_path.stat().st_size
+    manifest["output"]["rendered_at"] = time.time()
+    manifest["output"]["duration_sec"] = validation["duration"]
+    manifest["validation"] = validation
+    
     return project_state

@@ -24,23 +24,16 @@ wheels/
 # Environment
 .env
 .env.local
-.env.*
-.venv/
-venv/
-ENV/
+*.env.*
+
+# Data output files
+data/projects/*/output/
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# Logs
-*.log
-
-# Tests
-.pytest_cache/
-.coverage
-htmlcov/
-coverage/
+# OS
+.DS_Store
+Thumbs.db
 ```

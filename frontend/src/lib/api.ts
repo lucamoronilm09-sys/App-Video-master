@@ -17,8 +17,14 @@ export interface ClipOverride { duration_sec?: number; transition_out?: number; 
 export interface JobProgress { fraction: number; label?: string; note?: string; }
 export interface Job { id: string; kind: "render" | "drive_import" | "intake"; status: "pending" | "running" | "completed" | "failed"; error?: string; created_at: string; updated_at: string; progress?: JobProgress; }
 export interface PipelineLogEntry { stage: string; status: "pending" | "running" | "completed" | "failed"; message?: string; timestamp?: number; }
-export interface RenderManifestOutput { path: string; resolution?: string; fps?: number; vcodec?: string; preset?: string; crf?: number; audio_codec?: string | null; size_bytes?: number; duration_sec?: number; rendered_at?: number; }
-export interface RenderManifest { version?: number; status?: "done" | "failed" | "running" | "ready"; output?: RenderManifestOutput; inputs?: Record<string, unknown>[]; segments?: Record<string, unknown>[]; transitions?: Record<string, unknown>[]; filter_complex?: string; filter_complex_script?: string; args?: string[]; total_sec?: number; audio?: Record<string, unknown>; validation?: Record<string, unknown>; }
+export interface RenderManifestOutput { path: string; resolution: string; fps: number; vcodec: "libx264" | "libx265"; preset: string; crf: number; duration_sec?: number; size_bytes?: number; rendered_at?: number; }
+export interface InputEntry { index: number; path: string; kind: "video" | "photo" | "audio"; audio_track?: number; }
+export interface SegmentEntry { media_id: string; input_index: number; kind: "video" | "photo"; fit: "cover" | "contain"; label: string; filter: string; duration_sec: number; }
+export interface TransitionEntry { index: number; from_segment: number; to_segment: number; duration_sec: number; offset_sec: number; cut: boolean; }
+export interface AudioTrackInfo { path?: string; name?: string; duration_sec: number; }
+export interface AudioBlock { tracks: AudioTrackInfo[]; }
+export interface ValidationReport { codec: string; width: number; height: number; duration: number; size_bytes: number; }
+export interface RenderManifest { version: number; status: "ready" | "running" | "done" | "failed"; inputs: InputEntry[]; segments: SegmentEntry[]; transitions: TransitionEntry[]; filter_complex?: string; filter_complex_script: string; args: string[]; total_sec: number; output: RenderManifestOutput; audio?: AudioBlock; fps: number; resolution: string; vcodec: string; source_video_audio: "muted" | "mixed"; validation?: ValidationReport | null; }
 export interface QAReport { status: "approved" | "rejected"; checks?: { name: string; passed: boolean; detail: string }[]; issues?: { check: string; message: string; route_to: string }[]; }
 export interface ProjectError { stage: string; message: string; detail?: string; }
 export interface StoryChapter { title: string; kind: string; media_ids: string[]; start_index: number; end_index: number; reason?: string; }
