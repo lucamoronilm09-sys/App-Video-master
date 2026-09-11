@@ -16,6 +16,7 @@ from app.config import (
     DEFAULT_OUTPUT_SPEC,
     DEFAULT_STYLE_PROFILE,
 )
+from app.validators import validate_project_id
 
 SCHEMA_VERSION = 1
 
@@ -55,26 +56,41 @@ def new_project_state() -> dict:
 
 
 def project_dir(project_id: str) -> Path:
+    """Restituisce il path della directory del progetto.
+    
+    SECURITY: valida il project_id prima di costruire il percorso per prevenire
+    vulnerabilità di path traversal.
+    """
+    validate_project_id(project_id)
     return PROJECTS_DIR / project_id
 
 
 def media_dir(project_id: str) -> Path:
+    """Restituisce il path della directory media del progetto."""
     return project_dir(project_id) / MEDIA_SUBDIR
 
 
 def audio_dir(project_id: str) -> Path:
+    """Restituisce il path della directory audio del progetto."""
     return project_dir(project_id) / AUDIO_SUBDIR
 
 
 def output_dir(project_id: str) -> Path:
+    """Restituisce il path della directory output del progetto."""
     return project_dir(project_id) / OUTPUT_SUBDIR
 
 
 def thumbs_dir(project_id: str) -> Path:
+    """Restituisce il path della directory thumbnails del progetto."""
     return project_dir(project_id) / THUMBS_SUBDIR
 
 
 def ensure_project_dirs(project_id: str) -> Path:
+    """Crea le directory del progetto se non esistono.
+    
+    SECURITY: valida il project_id prima di creare directory.
+    """
+    validate_project_id(project_id)
     d = project_dir(project_id)
     for sub in (MEDIA_SUBDIR, AUDIO_SUBDIR, OUTPUT_SUBDIR, THUMBS_SUBDIR):
         (d / sub).mkdir(parents=True, exist_ok=True)
@@ -82,6 +98,7 @@ def ensure_project_dirs(project_id: str) -> Path:
 
 
 def state_path(project_id: str) -> Path:
+    """Restituisce il path del file state.json del progetto."""
     return project_dir(project_id) / "state.json"
 
 
@@ -95,6 +112,12 @@ def save_state(state: dict) -> dict:
 
 
 def load_state(project_id: str) -> dict:
+    """Carica lo stato del progetto dal filesystem.
+    
+    SECURITY: valida il project_id prima di accedere al filesystem per prevenire
+    vulnerabilità di path traversal.
+    """
+    validate_project_id(project_id)
     p = state_path(project_id)
     if not p.exists():
         raise FileNotFoundError(f"Progetto inesistente: {project_id}")

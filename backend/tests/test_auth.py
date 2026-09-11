@@ -4,7 +4,9 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from app.main import app
 
-client = TestClient(app)
+# Usa raise_server_exceptions=False per permettere ai middleware di 
+# restituire risposte HTTP 401/403 senza sollevare eccezioni Python
+client = TestClient(app, raise_server_exceptions=False)
 
 def test_health_no_auth_required():
     resp = client.get("/api/health")
@@ -14,20 +16,37 @@ def test_no_api_key_configured_allows_access():
     with patch.dict("os.environ", {}, clear=False):
         import os
         os.environ.pop("API_KEY", None)
-        resp = client.get("/api/projects")
+        # Ricrea il client dopo aver modificato le variabili d'ambiente
+        from importlib import reload
+        import app.main
+        reload(app.main)
+        test_client = TestClient(app.main.app, raise_server_exceptions=False)
+        resp = test_client.get("/api/projects")
         assert resp.status_code == 200
 
 def test_api_key_required_when_configured():
     with patch.dict("os.environ", {"API_KEY": "test-key-123"}):
-        resp = client.get("/api/projects")
+        from importlib import reload
+        import app.main
+        reload(app.main)
+        test_client = TestClient(app.main.app, raise_server_exceptions=False)
+        resp = test_client.get("/api/projects")
         assert resp.status_code == 401
         
 def test_valid_api_key_allows_access():
     with patch.dict("os.environ", {"API_KEY": "test-key-123"}):
-        resp = client.get("/api/projects", headers={"X-API-Key": "test-key-123"})
+        from importlib import reload
+        import app.main
+        reload(app.main)
+        test_client = TestClient(app.main.app, raise_server_exceptions=False)
+        resp = test_client.get("/api/projects", headers={"X-API-Key": "test-key-123"})
         assert resp.status_code == 200
 
 def test_wrong_api_key_rejected():
     with patch.dict("os.environ", {"API_KEY": "test-key-123"}):
-        resp = client.get("/api/projects", headers={"X-API-Key": "wrong-key"})
+        from importlib import reload
+        import app.main
+        reload(app.main)
+        test_client = TestClient(app.main.app, raise_server_exceptions=False)
+        resp = test_client.get("/api/projects", headers={"X-API-Key": "wrong-key"})
         assert resp.status_code == 401

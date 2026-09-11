@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from googleapiclient.errors import HttpError
 
 from app.agents import drive_import, intake, normalizer, sequence
-from app.api.routes import _get_state_or_404, _run_stages, _public_job, progress_payload
+from app.api.common import build_progress_payload, get_state_or_404, run_pipeline_stages, public_job_response
 from app.api.schemas import DriveCredentialsRequest, DriveImportRequest, ProjectState
 from app.jobs import manager as jobs
 from app.pipeline import state as state_store
@@ -169,14 +169,14 @@ def drive_files(project_id: str, folder_id: str = "root",
 @router.get("/projects/{project_id}/progress")
 def project_progress(project_id: str) -> dict:
     """Snapshot leggero per il polling fallback della UI."""
-    state = _get_state_or_404(project_id)
-    return progress_payload(state)
+    state = get_state_or_404(project_id)
+    return build_progress_payload(state)
 
 
 @router.post("/projects/{project_id}/drive/import", response_model=ProjectState)
 async def drive_import_media(project_id: str, body: DriveImportRequest,
                              background: bool = False) -> dict:
-    state = _get_state_or_404(project_id)
+    state = get_state_or_404(project_id)
     if not body.file_ids and not body.folder_ids:
         raise HTTPException(status_code=400, detail="Seleziona almeno un file o una cartella")
     if dc.load_credentials() is None:
@@ -188,9 +188,9 @@ async def drive_import_media(project_id: str, body: DriveImportRequest,
                               {"file_ids": body.file_ids, "folder_ids": body.folder_ids})
         except jobs.JobExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
-        return JSONResponse(status_code=202, content={"job": _public_job(job)})
+        return JSONResponse(status_code=202, content={"job": public_job_response(job)})
     state["drive_import_request"] = {"file_ids": body.file_ids, "folder_ids": body.folder_ids}
-    state = await _run_stages(state, (("drive_import", drive_import.run),
+    state = await run_pipeline_stages(state, (("drive_import", drive_import.run),
                                       ("intake", intake.run),
                                       ("normalizer", normalizer.run),
                                       ("sequence", sequence.run)))
