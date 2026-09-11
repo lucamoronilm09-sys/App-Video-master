@@ -147,7 +147,10 @@ def test_upload_assigns_photo_duration(isolated_projects):
     pid = client.post("/api/projects").json()["project_id"]
     data = _upload_photo(client, pid)
     assert 0.0 <= data["media"][0].get("importance_score", 0.5) <= 1.0
-    assert data["media"][0]["duration_sec"] is not None
+    # Dopo Sequence, le foto hanno duration_sec=None (Edit Director la deciderà)
+    # ma hanno provisional_duration_sec per l'UI
+    assert data["media"][0]["duration_sec"] is None
+    assert data["media"][0].get("provisional_duration_sec") is not None
 
 
 def test_upload_audio_endpoint(isolated_projects, tmp_path):

@@ -41,7 +41,7 @@ class MediaItem(BaseModel):
     orientation: Literal["landscape", "portrait", "square"]
     width: int
     height: int
-    duration_sec: float
+    duration_sec: Optional[float] = None  # Per le foto: None fino a Edit Director; per i video: durata sorgente
     order_index: int
     fit_mode: Optional[Literal["cover", "contain"]] = None
     background_fill: Optional[Literal["blur", "solid_color"]] = None
@@ -59,7 +59,8 @@ class MediaItem(BaseModel):
     vision_ai_used: bool = False
     scene_type: Optional[str] = None
     duration_source: str = "unknown"
-    ai_duration_sec: Optional[float] = None
+    provisional_duration_sec: Optional[float] = None  # Solo per foto: durata UI prima dell'audio
+    ai_duration_sec: Optional[float] = None  # Durata scelta dall'Edit Director
     ai_edit_score: Optional[float] = None
     music_sync: bool = False
     vision_analysis: Optional[VisionAnalysis] = None

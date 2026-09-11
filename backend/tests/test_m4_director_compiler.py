@@ -74,10 +74,20 @@ async def test_director_edl_structure():
     edl = out["edit_decision_list"]
     assert len(edl) == 4
     assert [e["media_id"] for e in edl] == ["p1", "p2", "v1", "p3"]
+    
+    # Verifica coerenza timeline con transizioni:
+    # start[i] = start[i-1] + duration[i-1] - transition_out[i-1]
     for prev, cur in zip(edl, edl[1:]):
-        assert cur["start_sec_in_final_video"] == pytest.approx(prev["start_sec_in_final_video"] + prev["duration_sec"], abs=0.02)
-        assert cur["transition_in"] == prev["transition_out"] == 0.0
+        expected_start = prev["start_sec_in_final_video"] + prev["duration_sec"] - prev["transition_out"]
+        assert cur["start_sec_in_final_video"] == pytest.approx(expected_start, abs=0.02)
+        # Coerenza transizioni: transition_out della precedente == transition_in della corrente
+        assert cur["transition_in"] == pytest.approx(prev["transition_out"], abs=0.01)
+    
+    # Ultima clip deve avere transition_out = 0
     assert edl[-1]["transition_out"] == 0.0
+    # Prima clip deve avere transition_in = 0
+    assert edl[0]["transition_in"] == 0.0
+    
     assert edl[2]["duration_sec"] == pytest.approx(8.0)
 
 

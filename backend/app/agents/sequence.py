@@ -3,6 +3,14 @@
 Prepara i media per il montaggio. L'analisi semantica delle foto viene eseguita
 qui perché è indipendente dall'audio; la durata finale viene scelta dall'Edit
 Director dopo che anche l'audio è stato analizzato.
+
+CONTRATTO DURATE:
+- provisional_duration_sec: durata tecnica provvisoria mostrata nell'UI prima
+  che l'audio sia disponibile. Solo per foto.
+- duration_sec: durata effettiva della clip nel progetto. Per le foto viene
+  inizializzata a None e successivamente popolata dall'Edit Director.
+- ai_duration_sec: durata scelta dall'AI in base a visione+musica (Edit Director).
+- Nell'EDL finale, duration_sec è la durata quantizzata usata da FFmpeg.
 """
 from __future__ import annotations
 
@@ -55,7 +63,11 @@ async def _analyze_one_photo(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _provisional_duration(item: dict[str, Any]) -> float:
-    """Duration shown before music is available; Edit Director replaces it."""
+    """Durata provvisoria mostrata nell'UI prima che l'audio sia disponibile.
+    
+    Questa durata NON viene usata da Edit Director o Timeline Compiler.
+    Serve solo per mostrare un'anteprima all'utente.
+    """
     profile = item.get("vision_analysis") or {}
     importance = max(0.0, min(1.0, float(profile.get("importance", 0.5))))
     return round(2.5 + 2.0 * importance, 2)
@@ -70,10 +82,11 @@ async def run(project_state: dict) -> dict:
     clips: list[dict[str, Any]] = []
     for item in media_list:
         if item.get("type") == "photo":
-            # Pydantic richiede un float nel ProjectState: questo valore è solo
-            # provvisorio. L'Edit Director lo sostituisce con la durata musicale.
-            item["duration_sec"] = _provisional_duration(item)
-            item["duration_source"] = "vision_provisional"
+            # Duration_sec per le foto rimane None: verrà deciso dall'Edit Director.
+            # Assegniamo solo provisional_duration_sec per l'UI.
+            item["provisional_duration_sec"] = _provisional_duration(item)
+            item["duration_sec"] = None  # Nessuna durata definitiva ancora
+            item["duration_source"] = "pending_music"
             item["trim_start_sec"] = None
             item["trim_end_sec"] = None
         else:

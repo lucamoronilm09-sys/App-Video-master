@@ -19,6 +19,7 @@ import random
 from typing import Any
 
 from app.agents import edit_director
+from app.agents.timeline_core import compute_timeline, edl_to_timeline_entries
 
 PHOTO_MANUAL_MIN_SEC = 1.0
 PHOTO_MANUAL_MAX_SEC = 12.0
@@ -68,8 +69,8 @@ def _check_transition(value: float, is_last: bool) -> float:
 
 
 async def run(project_state: dict) -> dict:
-    edl: list[dict[str, Any]] = project_state.get("edit_decision_list", [])
-    if not edl:
+    edl_raw: list[dict[str, Any]] = project_state.get("edit_decision_list", [])
+    if not edl_raw:
         return project_state
     overrides: dict[str, dict] = project_state.get("clip_overrides") or {}
     if not overrides:
@@ -77,7 +78,11 @@ async def run(project_state: dict) -> dict:
 
     media_by_id = {m["id"]: m for m in project_state.get("media", [])}
     pid = str(project_state.get("project_id", ""))
-    n = len(edl)
+    n = len(edl_raw)
+    
+    # Lavora su una copia dell'EDL per applicare gli override
+    edl = [dict(e) for e in edl_raw]
+    
     for i, e in enumerate(edl):
         ov = overrides.get(e.get("media_id", "")) or {}
         if not ov:
@@ -99,19 +104,16 @@ async def run(project_state: dict) -> dict:
         if "transition_out" in ov and ov["transition_out"] is not None:
             t = _check_transition(ov["transition_out"], is_last=(i == n - 1))
             e["transition_out"] = t
-            if i + 1 < n:
-                edl[i + 1]["transition_in"] = t
+            # La coerenza transition_out/transition_in verrà gestita da compute_timeline
         if "ken_burns" in ov and ov["ken_burns"] is not None:
             if m.get("type") != "photo":
                 raise ValueError("ken_burns assegnabile solo alle foto")
             e["ken_burns"] = ken_burns_for(str(ov["ken_burns"]), pid, str(m["id"]))
 
-    # ricalcola gli start cumulativi con overlap delle dissolvenze
-    gaps = [float(e.get("transition_out", 0.0)) for e in edl[:-1]]
-    durs = [float(e.get("duration_sec", 0.0)) for e in edl]
-    starts = [0.0]
-    for i in range(1, n):
-        starts.append(round(starts[i - 1] + durs[i - 1] - gaps[i - 1], 2))
-    for e, s in zip(edl, starts):
-        e["start_sec_in_final_video"] = s
+    # Usa la funzione centrale per ricalcolare start, transizioni coerenti e total_sec
+    fps = 30  # default FPS per la quantizzazione
+    computed_entries, total_sec = compute_timeline(edl, fps=fps)
+    edl_coherent = edl_to_timeline_entries(edl, computed_entries)
+    
+    project_state["edit_decision_list"] = edl_coherent
     return project_state
