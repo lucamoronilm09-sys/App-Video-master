@@ -4,6 +4,7 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 pydantic>=2.7
 python-multipart>=0.0.6
+slowapi>=0.1.9
 pillow>=10.0
 pillow-heif>=0.18
 numpy>=1.26

@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Set
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app.api.schemas import (
@@ -66,9 +66,22 @@ IMAGE_MAGIC = {
 # (La validazione audio è per-estensione in _validate_audio_magic: ID3/frame-sync
 # per gli MP3, fLaC, ASF per i WMA, OggS, RIFF/RF64, ftyp — vedi sotto.)
 
-# Rate limiting per render
+# Rate limiting per render (thread-safe)
+import threading
+from app.main import limiter
+_last_render_lock = threading.Lock()
 _last_render_time: dict[str, float] = {}
 _RENDER_RATE_LIMIT_SEC = 30
+_MAX_TRACKED_PROJECTS = 10000
+
+
+def _cleanup_old_render_times():
+    """Rimuove entries più vecchie di 1 ora."""
+    cutoff = time.time() - 3600
+    with _last_render_lock:
+        stale = [k for k, v in _last_render_time.items() if v < cutoff]
+        for k in stale:
+            del _last_render_time[k]
 
 
 @router.get("/health", response_model=HealthCheck)
@@ -86,7 +99,8 @@ def list_projects() -> list[dict]:
 
 
 @router.post("/projects", response_model=ProjectState, status_code=201)
-def create_project() -> dict:
+@limiter.limit("10/minute")
+def create_project(request: Request) -> dict:
     state = state_store.new_project_state()
     state_store.ensure_project_dirs(state["project_id"])
     state_store.save_state(state)
@@ -102,7 +116,9 @@ def get_project(project_id: str) -> dict:
 
 
 @router.post("/projects/{project_id}/media", response_model=ProjectState)
+@limiter.limit("5/minute")
 async def upload_media(
+    request: Request,
     project_id: str,
     files: list[UploadFile] = File(...),
     source: str = Form("local"),
@@ -587,17 +603,23 @@ async def render_video(project_id: str, background: bool = False) -> dict:
     if not state.get("media"):
         raise HTTPException(status_code=400, detail="Nessun media: carica prima foto/video")
     
-    # SECURITY: rate limiting su render sincrono (DoS)
+    # SECURITY: rate limiting su render sincrono (DoS) - thread-safe
     if not background:
         now = time.time()
-        last = _last_render_time.get(project_id, 0)
-        if now - last < _RENDER_RATE_LIMIT_SEC:
-            wait_sec = int(_RENDER_RATE_LIMIT_SEC - (now - last))
-            raise HTTPException(
-                status_code=429,
-                detail=f"Attendi {wait_sec}s tra i render"
-            )
-        _last_render_time[project_id] = now
+        with _last_render_lock:
+            last = _last_render_time.get(project_id, 0)
+            if now - last < _RENDER_RATE_LIMIT_SEC:
+                remaining = int(_RENDER_RATE_LIMIT_SEC - (now - last))
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Render troppo frequente: attendi {remaining}s",
+                    headers={"Retry-After": str(remaining)},
+                )
+            _last_render_time[project_id] = now
+        
+        # Cleanup periodico per evitare memory leak
+        if len(_last_render_time) > _MAX_TRACKED_PROJECTS:
+            _cleanup_old_render_times()
     
     if background:
         try:

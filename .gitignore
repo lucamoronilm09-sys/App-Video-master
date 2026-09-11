@@ -1,26 +1,28 @@
 ```
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
+# Dependencies
 .venv/
-.ENV
-.venv.bak/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-htmlcov/
+venv/
+__pycache__/
+
+# Logs and temp files
+*.log
+*.tmp
 
 # Environment
 .env
 .env.local
-.env.*
+*.env.*
 
-# Logs
-*.log
+# Editors
+.vscode/
+.idea/
+
+# Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+.Python
+*.so
+*.egg-info/
 ```
