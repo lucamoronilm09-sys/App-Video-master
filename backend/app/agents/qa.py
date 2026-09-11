@@ -103,6 +103,14 @@ def check_transitions(manifest: dict[str, Any], project_state: dict) -> tuple[bo
     fps = int(((manifest.get("output") or {}).get("fps")) or 30)
     frame_tol = 1.0 / max(1, fps) + 0.005
     cuts = 0
+    
+    # Controllo 1: verificare che le transizioni nel manifest corrispondano al filter_complex
+    filter_text = manifest.get("filter_complex", "")
+    expected_xfade = sum(1 for t in transitions if float(t.get("duration_sec", 0)) > 0.0)
+    actual_xfade = filter_text.count("xfade=")
+    if actual_xfade != expected_xfade:
+        return False, f"filtergraph ha {actual_xfade} xfade ma il manifest ne dichiara {expected_xfade}"
+    
     for t, (a, b) in zip(transitions, zip(edl, edl[1:])):
         d = float(t.get("duration_sec", 0))
         if d < 0.0 or d > TRANS_MAX_SEC:
@@ -114,12 +122,12 @@ def check_transitions(manifest: dict[str, Any], project_state: dict) -> tuple[bo
         if abs(d - want) > frame_tol:
             return False, (f"transizione manifest ({d}s) incoerente con EDL "
                            f"({want}s) tra {a.get('media_id')} e {b.get('media_id')}")
-    expected_xfade = sum(1 for t in transitions if float(t.get("duration_sec", 0)) > 0.0)
-    if manifest.get("filter_complex", "").count("xfade=") != expected_xfade:
-        return False, "filtergraph senza xfade per ogni dissolvenza"
+    
+    # Controllo finale: coerenza transition_out/transition_in nell'EDL
     for a, b in zip(edl, edl[1:]):
         if float(a.get("transition_out", -1)) != float(b.get("transition_in", -2)):
             return False, f"transizione incoerente tra {a.get('media_id')} e {b.get('media_id')}"
+    
     tail = f", {cuts} stacchi secchi (scelta utente)" if cuts else ", nessun taglio secco"
     return True, f"{len(transitions)} transizioni entro {TRANS_MAX_SEC}s{tail}"
 

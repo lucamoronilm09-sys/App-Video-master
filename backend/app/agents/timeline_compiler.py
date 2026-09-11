@@ -10,12 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from app.agents.timeline_core import compute_timeline, validate_timeline, quantize_to_fps, edl_to_timeline_entries
+from app.agents.render_manifest_schema import MANIFEST_VERSION, create_manifest, validate_manifest_schema
 from app.pipeline import state as state_store
 
 TRANS_MANUAL_MAX_SEC = 1.5
 ZOOM_MAX = 1.15
 PAN_MAX_FRAC = 0.12
-MANIFEST_VERSION = 6
 VCODEC_MAP = {"h264": "libx264", "h265": "libx265"}
 CRF_MAP = {"h264": 18, "h265": 20}
 ENCODE_PRESET = "medium"
@@ -142,12 +142,12 @@ async def run(project_state: dict) -> dict:
                 fw2 = _even(round(2 * h * m_w / m_h))
                 fw1 = _even(round(h * m_w / m_h))
                 filters.append(f"[{i}:v]trim=end_frame=1,setpts=PTS-STARTPTS,split=2[pbg{i}][pfg{i}]")
-                filters.append(f"[pbg{i}]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},gblur=sigma=40,eq=brightness=-0.25,tpad=start_mode=clone:start_duration={duration},setpts=N/{fps}/TB,fps={fps}[bg{i}]")
+                filters.append(f"[pbg{i}]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},gblur=sigma=40,eq=brightness=-0.25,tpad=start_mode=clone:start_duration={actual_duration},setpts=N/{fps}/TB,fps={fps}[bg{i}]")
                 filters.append(f"[pfg{i}]scale={fw2}:{2*h},{_zoompan(entry['ken_burns'], frames, fw2, 2*h, fps)},scale={fw1}:{h},{PHOTO_UNSHARP},setpts=PTS-STARTPTS[fg{i}]")
                 filters.append(f"[bg{i}][fg{i}]overlay=(W-w)/2:(H-h)/2,{_tail(fps)}[v{i}]")
                 fit = "contain"
             else:
-                filters.append(f"[{i}:v]trim=end_frame=1,setpts=PTS-STARTPTS,scale={2*w}:{2*h}:force_original_aspect_ratio=increase,crop={2*w}:{2*h},{_zoompan(entry['ken_burns'], frames, 2*w, 2*h, fps)},scale={w}:{h},{PHOTO_UNSHARP},tpad=start_mode=clone:start_duration={duration},setpts=PTS-STARTPTS,{_tail(fps)}[v{i}]")
+                filters.append(f"[{i}:v]trim=end_frame=1,setpts=PTS-STARTPTS,scale={2*w}:{2*h}:force_original_aspect_ratio=increase,crop={2*w}:{2*h},{_zoompan(entry['ken_burns'], frames, 2*w, 2*h, fps)},scale={w}:{h},{PHOTO_UNSHARP},tpad=start_mode=clone:start_duration={actual_duration},setpts=PTS-STARTPTS,{_tail(fps)}[v{i}]")
                 fit = "cover"
             segments.append({"media_id": entry["media_id"], "input_index": i, "kind": kind, "fit": fit, "label": f"v{i}", "filter": filters[-1], "duration_sec": actual_duration})
         else:
@@ -242,31 +242,38 @@ async def run(project_state: dict) -> dict:
         if inp["kind"] == "audio":
             args += ["-i", inp["path"]]
         elif inp["kind"] == "photo":
-            args += ["-i", inp["path"], "-t", str(durations[inp["index"]])]
+            # Usiamo -loop 1 per le foto e lasciamo che il filtro gestisca la durata con tpad
+            args += ["-loop", "1", "-i", inp["path"]]
         else:
             args += ["-i", inp["path"]]
+    # Aggiungiamo -t alla fine per limitare la durata totale del render
     args += ["-filter_complex", script, "-map", "[vout]"]
     if audio_block:
         args += ["-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]
     else:
         args += ["-an"]
-    args += ["-c:v", VCODEC_MAP[vcodec], "-preset", ENCODE_PRESET, "-crf", str(CRF_MAP[vcodec]), "-pix_fmt", "yuv420p", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv", "-r", str(fps), "-movflags", "+faststart", out_path]
+    args += ["-c:v", VCODEC_MAP[vcodec], "-preset", ENCODE_PRESET, "-crf", str(CRF_MAP[vcodec]), "-pix_fmt", "yuv420p", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv", "-r", str(fps), "-movflags", "+faststart", "-t", str(total), out_path]
     
-    project_state["render_manifest"] = {
-        "version": MANIFEST_VERSION,
-        "args": args,
-        "output": {"path": out_path, "size_bytes": 0},
-        "total_sec": total,
-        "fps": fps,
-        "resolution": f"{w}x{h}",
-        "vcodec": vcodec,
-        "inputs": inputs,
-        "segments": segments,
-        "transitions": transitions,
-        "audio": audio_block,
-        "filter_complex_script": str(script_path),
-        "status": "ready",
-        "source_video_audio": "muted",
-    }
+    # Costruisci il manifest usando la factory dello schema
+    project_state["render_manifest"] = create_manifest(
+        inputs=inputs,
+        segments=segments,
+        transitions=transitions,
+        filter_complex_script=str(script_path),
+        args=args,
+        total_sec=total,
+        output_path=out_path,
+        resolution=f"{w}x{h}",
+        fps=fps,
+        vcodec=vcodec,
+        audio_block=audio_block,
+        filter_complex_inline=script,
+    )
     project_state["edl"] = edl
+    
+    # Validazione finale del manifest (sanity check)
+    validation_errors = validate_manifest_schema(project_state["render_manifest"])
+    if validation_errors:
+        raise RuntimeError(f"RenderManifest non valido: {'; '.join(validation_errors)}")
+    
     return project_state

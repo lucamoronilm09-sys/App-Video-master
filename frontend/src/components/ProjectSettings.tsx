@@ -71,7 +71,7 @@ export function ProjectSettings({ spec, onSave, busy, media }: ProjectSettingsPr
     setNameBusy(true);
     setNameError(null);
     try {
-      const updated = await updateProject(projectId, normalized);
+      const updated = await updateProject(projectId, { name: normalized });
       setProjectName(updated.name);
       setNameDraft(updated.name);
     } catch (err) {
