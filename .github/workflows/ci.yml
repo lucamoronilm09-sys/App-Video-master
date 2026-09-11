@@ -25,7 +25,7 @@ jobs:
         run: cd backend && pip-compile requirements.in --output-file requirements.txt --dry-run
       - name: Run backend tests with coverage
         working-directory: backend
-        run: pytest --cov=app --cov-report=term --cov-fail-under=50
+        run: pytest --cov=app --cov-report=term --cov-fail-under=60
 
   frontend:
     runs-on: ubuntu-latest

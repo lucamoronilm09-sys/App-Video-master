@@ -201,11 +201,11 @@ pytest --cov=app --cov-report=html
 - `--cov=app`: misura il coverage sul pacchetto `app`
 - `--cov-report=term`: mostra il report nel terminale
 - `--cov-report=html`: genera report HTML nella cartella `htmlcov/`
-- `--cov-fail-under=50`: fallisce se il coverage è inferiore al 50% (soglia minima consigliata)
+- `--cov-fail-under=60`: fallisce se il coverage è inferiore al 60% (soglia minima attuale (target: 70%))
 
 La configurazione `.coveragerc` esclude automaticamente test, cache e codice boilerplate.
 
-**Nota:** La soglia di coverage del 50% è un minimo accettabile per progetti in evoluzione. Si consiglia di aumentare gradualmente la copertura dei test. Alcuni test possono richiedere molto tempo; esegui solo i test necessari durante lo sviluppo.
+**Nota:** La soglia di coverage del 60% è un minimo accettabile per progetti in evoluzione. Si consiglia di aumentare gradualmente la copertura dei test verso il target del 70%. Alcuni test possono richiedere molto tempo; esegui solo i test necessari durante lo sviluppo.
 
 ## Test (comandi rapidi)
 
