@@ -192,6 +192,10 @@ async def _handle_drive_import(job: dict) -> dict:
 async def _run_one(job: dict) -> None:
     jid = job["job_id"]
     stop = asyncio.Event()
+    job_logger = get_logger(f"jobs.{jid}")
+    
+    job_logger.info("Job %s iniziato: kind=%s, project=%s", 
+                    jid, job["kind"], job["project_id"])
 
     async def heartbeat() -> None:
         """Riversa frazione/nota dal registro nel record ogni 2s."""
@@ -216,6 +220,7 @@ async def _run_one(job: dict) -> None:
         else:
             raise ValueError(f"kind sconosciuto: {job['kind']}")
     except Exception as exc:
+        job_logger.error("Job %s fallito: %s", jid, exc, exc_info=True)
         cur = get(jid) or job
         cur["status"] = "failed"
         cur["error"] = str(exc)[-1000:]
@@ -230,7 +235,8 @@ async def _run_one(job: dict) -> None:
             await beat
         except Exception:
             # L'heartbeat non deve mai mascherare l'esito del job.
-            logger.exception("jobs: heartbeat di %s terminato con errore", jid)
+            job_logger.exception("jobs: heartbeat di %s terminato con errore", jid)
+    job_logger.info("Job %s completato con successo", jid)
     cur = get(jid) or job
     cur["status"] = "done"
     cur["progress"] = {"fraction": 1.0, "note": "completato", "stage": "done"}
@@ -257,6 +263,7 @@ async def worker_loop(poll_sec: float = 1.0) -> None:
             failures = 0
             await _run_one(job)
         except asyncio.CancelledError:
+            logger.info("Worker loop cancellato (shutdown)")
             raise  # shutdown pulito da lifespan
         except Exception:
             failures += 1

@@ -150,11 +150,19 @@ async def _validate_and_stream_file(
     magic_bytes = b""
     total_size = 0
     first_chunk = True
-    file_started = False
     
     try:
         async with aiofiles.open(dest_path, "wb") as out_f:
-            async for chunk in file.file.iter_chunks(CHUNK_SIZE):
+            while True:
+                # Leggi chunk (UploadFile.file è uno SpooledTemporaryFile)
+                # Usiamo read() sincrono dentro run_in_threadpool implicito di aiofiles
+                chunk = await asyncio.get_event_loop().run_in_executor(
+                    None, file.file.read, CHUNK_SIZE
+                )
+                
+                if not chunk:
+                    break
+                
                 chunk_size = len(chunk)
                 
                 # Controlla dimensione totale prima di aggiungere
@@ -175,7 +183,6 @@ async def _validate_and_stream_file(
                 # Scrivi chunk su disco
                 await out_f.write(chunk)
                 total_size += chunk_size
-                file_started = True
         
         # Validazione magic bytes DOPO aver scritto tutto (ma prima di usare il file)
         if not _validate_magic_bytes_streaming(magic_bytes, ext):

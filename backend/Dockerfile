@@ -1,5 +1,7 @@
 # Backend FastAPI - Dockerfile
-FROM python:3.12-slim
+# Supporta sia sviluppo che produzione tramite variabile d'ambiente BUILD_MODE
+
+FROM python:3.12-slim AS base
 
 WORKDIR /app
 
@@ -8,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Installa pip-tools per la gestione delle dipendenze
@@ -31,5 +34,5 @@ ENV PYTHONUNBUFFERED=1 \
     HOST=0.0.0.0 \
     PORT=8000
 
-# Comando per avviare l'applicazione con hot-reload in sviluppo
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Comando default per produzione (può essere sovrascritto in docker-compose)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
