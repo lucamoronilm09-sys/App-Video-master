@@ -14,7 +14,7 @@ Stato avanzamento: **`PROGRESS.md`**.
 
 ### Opzione 2: Installazione locale (Windows)
 
-- Python 3.11+, Node.js 22+, FFmpeg — tutti nel PATH
+- Python 3.12+, Node.js 22+, FFmpeg — tutti nel PATH
 - Per il Vision AI locale è consigliato **Ollama** con almeno un modello vision-capable installato. Il backend lo rileva automaticamente.
 
 ## Gestione dipendenze backend
