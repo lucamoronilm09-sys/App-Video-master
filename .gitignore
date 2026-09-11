@@ -1,37 +1,28 @@
 ```
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
+# Dependencies
 .venv/
-.ENV
-.venv.bak/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-htmlcov/
+venv/
+__pycache__/
+
+# Logs and temp files
+*.log
+*.tmp
 
 # Environment
 .env
 .env.local
-.env.*
+*.env.*
 
-# Docker
-Dockerfile
-docker-compose.yml
+# Editors
+.vscode/
+.idea/
 
-# Dependencies
-requirements.txt
-requirements.in
-
-# Logs
-*.log
-
-# Coverage
-.coveragerc
+# Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+.Python
+*.so
+*.egg-info/
 ```
