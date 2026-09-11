@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.agents.timeline_core import compute_timeline, validate_timeline, quantize_to_fps, edl_to_timeline_entries
 from app.pipeline import state as state_store
 
 TRANS_MANUAL_MAX_SEC = 1.5
@@ -63,94 +64,209 @@ def _tail(fps: int) -> str: return f"fps={fps},format=yuv420p,setsar=1,settb=AVT
 
 
 async def run(project_state: dict) -> dict:
-    edl = list(project_state.get("edit_decision_list") or [])
-    if not edl: project_state["render_manifest"] = None; project_state["edl"] = None; return project_state
-    state_store.ensure_project_dirs(project_state["project_id"]); media_by_id = {m["id"]: m for m in project_state.get("media", [])}; spec = project_state.get("output_spec") or {}
-    w, h = _resolution(spec); fps = int(spec.get("fps", 30)); vcodec = spec.get("vcodec", "h264")
-    if vcodec not in VCODEC_MAP: raise ValueError(f"vcodec non supportato: {vcodec} (h264|h265)")
+    edl_raw = list(project_state.get("edit_decision_list") or [])
+    if not edl_raw:
+        project_state["render_manifest"] = None
+        project_state["edl"] = None
+        return project_state
+    
+    state_store.ensure_project_dirs(project_state["project_id"])
+    media_by_id = {m["id"]: m for m in project_state.get("media", [])}
+    spec = project_state.get("output_spec") or {}
+    w, h = _resolution(spec)
+    fps = int(spec.get("fps", 30))
+    vcodec = spec.get("vcodec", "h264")
+    
+    if vcodec not in VCODEC_MAP:
+        raise ValueError(f"vcodec non supportato: {vcodec} (h264|h265)")
+    
+    # Usa la funzione centrale per calcolare la timeline coerente
+    # Questo garantisce che start, duration, transition siano allineati
+    computed_entries, total_sec = compute_timeline(edl_raw, fps=fps)
+    
+    # Valida la timeline rispetto al contratto matematico
+    errors = validate_timeline(computed_entries, total_sec, fps=fps)
+    if errors:
+        raise ValueError(f"Timeline non valida: {'; '.join(errors)}")
+    
+    # Aggiorna l'EDL con i valori coerenti
+    edl = edl_to_timeline_entries(edl_raw, computed_entries)
+    
+    # Validazioni aggiuntive specifiche del compiler
     for entry in edl:
         mid = entry.get("media_id")
-        if mid not in media_by_id: raise ValueError(f"EDL fa riferimento a media inesistente: {mid}")
-        for key in ("start_sec_in_final_video", "duration_sec", "transition_in", "transition_out"):
-            if key not in entry: raise ValueError(f"voce EDL {mid} incompleta: manca {key}")
-        if float(entry["duration_sec"]) <= 0: raise ValueError(f"durata non positiva per {mid}")
+        if mid not in media_by_id:
+            raise ValueError(f"EDL fa riferimento a media inesistente: {mid}")
+        if float(entry["duration_sec"]) <= 0:
+            raise ValueError(f"durata non positiva per {mid}")
         for key in ("transition_in", "transition_out"):
             t = float(entry[key])
-            if not 0.0 <= t <= TRANS_MANUAL_MAX_SEC: raise ValueError(f"transizione fuori [0.0, {TRANS_MANUAL_MAX_SEC}]s per {mid}: {t}")
+            if not 0.0 <= t <= TRANS_MANUAL_MAX_SEC:
+                raise ValueError(f"transizione fuori [0.0, {TRANS_MANUAL_MAX_SEC}]s per {mid}: {t}")
         _validate_kb(entry.get("ken_burns"), media_by_id[mid].get("type") == "photo")
-    if float(edl[0]["transition_in"]) != 0.0 or float(edl[-1]["transition_out"]) != 0.0: raise ValueError("prima clip con transition_in o ultima con transition_out (devono essere 0)")
+    
+    # Verifica che le transizioni non siano più lunghe delle clip adiacenti
     for a, b in zip(edl, edl[1:]):
-        if abs(float(a["transition_out"]) - float(b["transition_in"])) > 1e-6: raise ValueError(f"transizione incoerente tra {a['media_id']} e {b['media_id']}")
         d = float(b["transition_in"])
-        if d >= min(float(a["duration_sec"]), float(b["duration_sec"])) - 0.05 and d > 0: raise ValueError(f"crossfade {d}s piu' lungo delle clip adiacenti")
-
-    inputs: list[dict[str, Any]] = []; filters: list[str] = []; segments: list[dict[str, Any]] = []; durations: list[float] = []
+        if d >= min(float(a["duration_sec"]), float(b["duration_sec"])) - 0.05 and d > 0:
+            raise ValueError(f"crossfade {d}s piu' lungo delle clip adiacenti")
+    
+    inputs: list[dict[str, Any]] = []
+    filters: list[str] = []
+    segments: list[dict[str, Any]] = []
+    durations: list[float] = []
+    
     for i, entry in enumerate(edl):
-        media = media_by_id[entry["media_id"]]; path = Path(media["path"])
-        if not path.is_file(): raise ValueError(f"file media mancante su disco: {path}")
+        media = media_by_id[entry["media_id"]]
+        path = Path(media["path"])
+        if not path.is_file():
+            raise ValueError(f"file media mancante su disco: {path}")
         kind = media.get("type")
-        if kind not in ("photo", "video"): raise ValueError(f"tipo media non supportato: {kind}")
-        duration = float(entry["duration_sec"]); frames = max(1, round(duration * fps)); actual_duration = round(frames / fps, 3); durations.append(actual_duration)
+        if kind not in ("photo", "video"):
+            raise ValueError(f"tipo media non supportato: {kind}")
+        
+        # Usa la durata quantizzata dalla timeline
+        duration = float(entry["duration_sec"])
+        frames = max(1, round(duration * fps))
+        actual_duration = round(frames / fps, 6)
+        durations.append(actual_duration)
+        
         # Nessun mapping audio: l'audio originale dei video è sempre escluso.
         inputs.append({"index": i, "path": str(path), "kind": kind})
+        
         if kind == "photo":
-            m_w = max(1, int(media.get("width") or w)); m_h = max(1, int(media.get("height") or h)); portrait = (media.get("orientation") == "portrait") or m_h > m_w
+            m_w = max(1, int(media.get("width") or w))
+            m_h = max(1, int(media.get("height") or h))
+            portrait = (media.get("orientation") == "portrait") or m_h > m_w
             if portrait:
-                fw2 = _even(round(2 * h * m_w / m_h)); fw1 = _even(round(h * m_w / m_h))
+                fw2 = _even(round(2 * h * m_w / m_h))
+                fw1 = _even(round(h * m_w / m_h))
                 filters.append(f"[{i}:v]trim=end_frame=1,setpts=PTS-STARTPTS,split=2[pbg{i}][pfg{i}]")
                 filters.append(f"[pbg{i}]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},gblur=sigma=40,eq=brightness=-0.25,tpad=start_mode=clone:start_duration={duration},setpts=N/{fps}/TB,fps={fps}[bg{i}]")
                 filters.append(f"[pfg{i}]scale={fw2}:{2*h},{_zoompan(entry['ken_burns'], frames, fw2, 2*h, fps)},scale={fw1}:{h},{PHOTO_UNSHARP},setpts=PTS-STARTPTS[fg{i}]")
-                filters.append(f"[bg{i}][fg{i}]overlay=(W-w)/2:(H-h)/2,{_tail(fps)}[v{i}]"); fit = "contain"
+                filters.append(f"[bg{i}][fg{i}]overlay=(W-w)/2:(H-h)/2,{_tail(fps)}[v{i}]")
+                fit = "contain"
             else:
-                filters.append(f"[{i}:v]trim=end_frame=1,setpts=PTS-STARTPTS,scale={2*w}:{2*h}:force_original_aspect_ratio=increase,crop={2*w}:{2*h},{_zoompan(entry['ken_burns'], frames, 2*w, 2*h, fps)},scale={w}:{h},{PHOTO_UNSHARP},tpad=start_mode=clone:start_duration={duration},setpts=PTS-STARTPTS,{_tail(fps)}[v{i}]"); fit = "cover"
+                filters.append(f"[{i}:v]trim=end_frame=1,setpts=PTS-STARTPTS,scale={2*w}:{2*h}:force_original_aspect_ratio=increase,crop={2*w}:{2*h},{_zoompan(entry['ken_burns'], frames, 2*w, 2*h, fps)},scale={w}:{h},{PHOTO_UNSHARP},tpad=start_mode=clone:start_duration={duration},setpts=PTS-STARTPTS,{_tail(fps)}[v{i}]")
+                fit = "cover"
             segments.append({"media_id": entry["media_id"], "input_index": i, "kind": kind, "fit": fit, "label": f"v{i}", "filter": filters[-1], "duration_sec": actual_duration})
         else:
-            ts, te = media.get("trim_start_sec"), media.get("trim_end_sec"); trim = f"trim=start={float(ts)}:end={float(te)},setpts=PTS-STARTPTS," if ts is not None and te is not None else ""
-            portrait = (media.get("orientation") == "portrait") or int(media.get("height") or 0) > int(media.get("width") or 0); exact = f"fps={fps},trim=end_frame={frames},setpts=PTS-STARTPTS"
+            ts, te = media.get("trim_start_sec"), media.get("trim_end_sec")
+            trim = f"trim=start={float(ts)}:end={float(te)},setpts=PTS-STARTPTS," if ts is not None and te is not None else ""
+            portrait = (media.get("orientation") == "portrait") or int(media.get("height") or 0) > int(media.get("width") or 0)
+            exact = f"fps={fps},trim=end_frame={frames},setpts=PTS-STARTPTS"
             if portrait:
-                filters.append(f"[{i}:v]{trim}split=2[vibg{i}][vifg{i}]"); filters.append(f"[vibg{i}]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},gblur=sigma=40,eq=brightness=-0.25,fps={fps}[bg{i}]"); filters.append(f"[vifg{i}]scale=-2:{h},{exact}[fg{i}]"); filters.append(f"[bg{i}][fg{i}]overlay=(W-w)/2:(H-h)/2,{_tail(fps)}[v{i}]"); fit = "contain"
+                filters.append(f"[{i}:v]{trim}split=2[vibg{i}][vifg{i}]")
+                filters.append(f"[vibg{i}]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},gblur=sigma=40,eq=brightness=-0.25,fps={fps}[bg{i}]")
+                filters.append(f"[vifg{i}]scale=-2:{h},{exact}[fg{i}]")
+                filters.append(f"[bg{i}][fg{i}]overlay=(W-w)/2:(H-h)/2,{_tail(fps)}[v{i}]")
+                fit = "contain"
             else:
-                filters.append(f"[{i}:v]{trim}scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},{exact},{_tail(fps)}[v{i}]"); fit = "cover"
+                filters.append(f"[{i}:v]{trim}scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},{exact},{_tail(fps)}[v{i}]")
+                fit = "cover"
             segments.append({"media_id": entry["media_id"], "input_index": i, "kind": kind, "fit": fit, "label": f"v{i}", "filter": filters[-1], "duration_sec": actual_duration})
 
-    transitions: list[dict[str, Any]] = []; current = "v0"; acc = durations[0]
+    # Costruisci le transizioni usando i valori quantizzati
+    transitions: list[dict[str, Any]] = []
+    current = "v0"
+    acc = durations[0]
+    
     for i in range(1, len(edl)):
-        d = _quantize(float(edl[i]["transition_in"]), fps)
+        # Usa il valore quantizzato dalla timeline
+        d = float(edl[i]["transition_in"])
         if d <= 0:
-            out = f"cut{i}"; filters.append(f"[{current}][v{i}]concat=n=2:v=1:a=0[{out}]"); transitions.append({"index": i, "from_segment": i-1, "to_segment": i, "duration_sec": 0.0, "offset_sec": round(acc, 3), "cut": True}); current = out; acc += durations[i]
+            out = f"cut{i}"
+            filters.append(f"[{current}][v{i}]concat=n=2:v=1:a=0[{out}]")
+            transitions.append({
+                "index": i,
+                "from_segment": i-1,
+                "to_segment": i,
+                "duration_sec": 0.0,
+                "offset_sec": round(acc, 3),
+                "cut": True
+            })
+            current = out
+            acc += durations[i]
         else:
-            offset = _quantize(acc - d, fps); out = f"xf{i}"; filters.append(f"[{current}][v{i}]xfade=transition=fade:duration={d}:offset={offset}[{out}]"); transitions.append({"index": i, "from_segment": i-1, "to_segment": i, "duration_sec": d, "offset_sec": offset, "cut": False}); current = out; acc = round(acc + durations[i] - d, 3)
-    total = round(acc, 3); filters.append(f"[{current}]format=yuv420p[vout]")
-    creative = round(sum(durations) - sum(float(e["transition_in"]) for e in edl[1:]), 3)
-    if abs(total - creative) > max(0.05, len(edl) * 0.05): raise ValueError(f"totale manifest ({total}s) incoerente con EDL ({creative}s)")
-
+            offset = round(acc - d, 6)
+            out = f"xf{i}"
+            filters.append(f"[{current}][v{i}]xfade=transition=fade:duration={d}:offset={offset}[{out}]")
+            transitions.append({
+                "index": i,
+                "from_segment": i-1,
+                "to_segment": i,
+                "duration_sec": d,
+                "offset_sec": offset,
+                "cut": False
+            })
+            current = out
+            acc = round(acc + durations[i] - d, 6)
+    
+    # Il totale deve coincidere esattamente con quello calcolato da compute_timeline
+    total = total_sec
+    filters.append(f"[{current}]format=yuv420p[vout]")
+    
     tracks = list(project_state.get("audio_tracks") or [])
     if not tracks:
         legacy = project_state.get("audio") or {}
-        if legacy.get("path"): tracks = [legacy]
+        if legacy.get("path"):
+            tracks = [legacy]
+    
     audio_block = None
     if tracks:
         labels: list[str] = []
         for ti, track in enumerate(tracks):
             audio_path = track.get("path")
-            if not audio_path or not Path(audio_path).is_file(): raise ValueError(f"file audio mancante su disco: {audio_path}")
-            idx = len(inputs); inputs.append({"index": idx, "path": str(audio_path), "kind": "audio", "audio_track": ti}); lab = f"aud{ti}"
-            filters.append(f"[{idx}:a]aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[{lab}]"); labels.append(f"[{lab}]")
-        if len(labels) == 1: source = labels[0]
-        else: filters.append("".join(labels) + f"concat=n={len(labels)}:v=0:a=1[playlist]"); source = "[playlist]"
-        fade_out_start = max(0.0, total - 1.0); filters.append(f"{source}aloop=loop=-1:size=2147483647,atrim=duration={total},asetpts=PTS-STARTPTS,afade=t=in:d=0.5,afade=t=out:st={fade_out_start:.3f}:d=1[aout]")
+            if not audio_path or not Path(audio_path).is_file():
+                raise ValueError(f"file audio mancante su disco: {audio_path}")
+            idx = len(inputs)
+            inputs.append({"index": idx, "path": str(audio_path), "kind": "audio", "audio_track": ti})
+            lab = f"aud{ti}"
+            filters.append(f"[{idx}:a]aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[{lab}]")
+            labels.append(f"[{lab}]")
+        if len(labels) == 1:
+            source = labels[0]
+        else:
+            filters.append("".join(labels) + f"concat=n={len(labels)}:v=0:a=1[playlist]")
+            source = "[playlist]"
+        fade_out_start = max(0.0, total - 1.0)
+        filters.append(f"{source}aloop=loop=-1:size=2147483647,atrim=duration={total},asetpts=PTS-STARTPTS,afade=t=in:d=0.5,afade=t=out:st={fade_out_start:.3f}:d=1[aout]")
         audio_block = {"tracks": [{"path": t.get("path"), "name": t.get("name"), "duration_sec": t.get("duration_sec", 0)} for t in tracks]}
 
-    script = ";\n".join(filters); script_path = state_store.output_dir(project_state["project_id"]) / "filter_complex.txt"; script_path.write_text(script, encoding="utf-8")
-    out_path = str(state_store.output_dir(project_state["project_id"]) / "final.mp4"); args: list[str] = ["ffmpeg", "-y", "-sws_flags", SWS_FLAGS]
+    script = ";\n".join(filters)
+    script_path = state_store.output_dir(project_state["project_id"]) / "filter_complex.txt"
+    script_path.write_text(script, encoding="utf-8")
+    out_path = str(state_store.output_dir(project_state["project_id"]) / "final.mp4")
+    args: list[str] = ["ffmpeg", "-y", "-sws_flags", SWS_FLAGS]
     for inp in inputs:
-        if inp["kind"] == "audio": args += ["-i", inp["path"]]
-        elif inp["kind"] == "photo": args += ["-i", inp["path"], "-t", str(durations[inp["index"]])]
-        else: args += ["-i", inp["path"]]
+        if inp["kind"] == "audio":
+            args += ["-i", inp["path"]]
+        elif inp["kind"] == "photo":
+            args += ["-i", inp["path"], "-t", str(durations[inp["index"]])]
+        else:
+            args += ["-i", inp["path"]]
     args += ["-filter_complex", script, "-map", "[vout]"]
-    if audio_block: args += ["-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]
-    else: args += ["-an"]
+    if audio_block:
+        args += ["-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]
+    else:
+        args += ["-an"]
     args += ["-c:v", VCODEC_MAP[vcodec], "-preset", ENCODE_PRESET, "-crf", str(CRF_MAP[vcodec]), "-pix_fmt", "yuv420p", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv", "-r", str(fps), "-movflags", "+faststart", out_path]
-    project_state["render_manifest"] = {"version": MANIFEST_VERSION, "args": args, "output": {"path": out_path, "size_bytes": 0}, "total_sec": total, "fps": fps, "resolution": f"{w}x{h}", "vcodec": vcodec, "segments": segments, "transitions": transitions, "audio": audio_block, "filter_complex_script": str(script_path), "status": "ready", "source_video_audio": "muted"}
+    
+    project_state["render_manifest"] = {
+        "version": MANIFEST_VERSION,
+        "args": args,
+        "output": {"path": out_path, "size_bytes": 0},
+        "total_sec": total,
+        "fps": fps,
+        "resolution": f"{w}x{h}",
+        "vcodec": vcodec,
+        "inputs": inputs,
+        "segments": segments,
+        "transitions": transitions,
+        "audio": audio_block,
+        "filter_complex_script": str(script_path),
+        "status": "ready",
+        "source_video_audio": "muted",
+    }
     project_state["edl"] = edl
     return project_state

@@ -1,0 +1,9 @@
+[0:v]trim=end_frame=1,setpts=PTS-STARTPTS,scale=3840:2160:force_original_aspect_ratio=increase,crop=3840:2160,zoompan=z='1.1':x='(iw-iw/zoom)*(1.0+(0.0-1.0)*on/59)':y='(iw-iw/zoom)*0.5':d=60:s=3840x2160:fps=30,scale=1920:1080,unsharp=5:5:0.35:5:5:0.0,tpad=start_mode=clone:start_duration=2.0,setpts=PTS-STARTPTS,fps=30,format=yuv420p,setsar=1,settb=AVTB[v0];
+[1:v]trim=end_frame=1,setpts=PTS-STARTPTS,split=2[pbg1][pfg1];
+[pbg1]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,gblur=sigma=40,eq=brightness=-0.25,tpad=start_mode=clone:start_duration=4.0,setpts=N/30/TB,fps=30[bg1];
+[pfg1]scale=1620:2160,zoompan=z='1.1':x='(iw-iw/zoom)*(0.0+(1.0-0.0)*on/119)':y='(iw-iw/zoom)*0.5':d=120:s=1620x2160:fps=30,scale=810:1080,unsharp=5:5:0.35:5:5:0.0,setpts=PTS-STARTPTS[fg1];
+[bg1][fg1]overlay=(W-w)/2:(H-h)/2,fps=30,format=yuv420p,setsar=1,settb=AVTB[v1];
+[v0][v1]concat=n=2:v=1:a=0[cut1];
+[cut1]format=yuv420p[vout];
+[2:a]aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[aud0];
+[aud0]aloop=loop=-1:size=2147483647,atrim=duration=6.0,asetpts=PTS-STARTPTS,afade=t=in:d=0.5,afade=t=out:st=5.000:d=1[aout]
