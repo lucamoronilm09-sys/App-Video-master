@@ -1,0 +1,59 @@
+# Data directory - sensitive files and generated artifacts
+data/
+
+# Frontend dependencies and build artifacts
+node_modules/
+.next/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Git
+.git/
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+
+# Testing and coverage
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage/
+*.cover
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker compose override (local customization)
+docker-compose.override.yml
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

@@ -4,16 +4,19 @@ M8: eventi realtime (SSE) + gestione errori."""
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import mimetypes
+import os
 import re
 import shutil
 import subprocess
 import time
 import uuid
 from pathlib import Path
-from typing import Set
+from typing import Set, List, Optional, Annotated
 
+import aiofiles
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
@@ -46,6 +49,8 @@ router = APIRouter()
 # === SECURITY: Limiti e validazione ===
 MAX_FILES_PER_REQUEST = 50
 MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024  # 500MB
+CHUNK_SIZE = 1024 * 1024  # 1MB per streaming upload
+MAGIC_BYTES_SIZE = 64  # Byte sufficienti per validazione magic bytes
 
 ALLOWED_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".ts", ".mts"}
 ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp", ".tiff", ".tif", ".gif"}
@@ -68,7 +73,7 @@ IMAGE_MAGIC = {
 
 # Rate limiting per render (thread-safe)
 import threading
-from app.main import limiter
+from app.ratelimit import limiter
 _last_render_lock = threading.Lock()
 _last_render_time: dict[str, float] = {}
 _RENDER_RATE_LIMIT_SEC = 30
@@ -115,12 +120,141 @@ def get_project(project_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Progetto non trovato") from None
 
 
-@router.post("/projects/{project_id}/media", response_model=ProjectState)
+async def _validate_and_stream_file(
+    file: UploadFile,
+    allowed_exts: Set[str],
+    dest_path: Path,
+) -> tuple[str, int]:
+    """Valida e scrive un file in streaming senza caricarlo tutto in RAM.
+    
+    Restituisce (safe_name, file_size) se valido.
+    Solleva HTTPException se invalido.
+    
+    - Legge solo i primi MAGIC_BYTES_SIZE byte per validazione magic bytes
+    - Streaming diretto su disco con chunk
+    - Validazione dimensione durante lo streaming
+    - Cleanup automatico del file parziale in caso di errore
+    """
+    ext = Path(file.filename or "").suffix.lower()
+    
+    # SECURITY: validazione estensione
+    if ext not in allowed_exts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Estensione non supportata: {ext}"
+        )
+    
+    safe_name = f"{uuid.uuid4().hex[:8]}{ext}"
+    
+    # Buffer per magic bytes
+    magic_bytes = b""
+    total_size = 0
+    first_chunk = True
+    file_started = False
+    
+    try:
+        async with aiofiles.open(dest_path, "wb") as out_f:
+            async for chunk in file.file.iter_chunks(CHUNK_SIZE):
+                chunk_size = len(chunk)
+                
+                # Controlla dimensione totale prima di aggiungere
+                if total_size + chunk_size > MAX_FILE_SIZE_BYTES:
+                    # Cleanup: rimuovi file parziale
+                    await out_f.close()
+                    dest_path.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File troppo grande: massimo {MAX_FILE_SIZE_BYTES // (1024*1024)}MB"
+                    )
+                
+                # Estrai magic bytes dal primo chunk
+                if first_chunk:
+                    magic_bytes = chunk[:MAGIC_BYTES_SIZE]
+                    first_chunk = False
+                
+                # Scrivi chunk su disco
+                await out_f.write(chunk)
+                total_size += chunk_size
+                file_started = True
+        
+        # Validazione magic bytes DOPO aver scritto tutto (ma prima di usare il file)
+        if not _validate_magic_bytes_streaming(magic_bytes, ext):
+            # Cleanup: rimuovi file invalido
+            dest_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=400,
+                detail="Contenuto file non corrisponde all'estensione"
+            )
+        
+        return safe_name, total_size
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Cleanup in caso di errore generico
+        if dest_path.exists():
+            dest_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Errore durante l'upload del file: {str(e)}")
+
+
+def _validate_magic_bytes_streaming(magic_bytes: bytes, ext: str) -> bool:
+    """Valida magic bytes da un buffer limitato (primi 64 byte)."""
+    if not magic_bytes:
+        return False
+    
+    # Video: cerca signature ftyp o webm/mkv
+    if ext in ALLOWED_VIDEO_EXTS:
+        for magic, fmt in VIDEO_MAGIC.items():
+            if magic_bytes.startswith(magic):
+                return True
+        # Fallback: presenza di byte nulli tipici container video
+        if b'\x00' in magic_bytes[:min(len(magic_bytes), 16)]:
+            return True
+    
+    # Immagini: validazione per formati specifici
+    if ext in ALLOWED_IMAGE_EXTS:
+        # Controllo magic bytes specifici
+        for magic, fmt in IMAGE_MAGIC.items():
+            if magic_bytes.startswith(magic):
+                return True
+        
+        # JPEG: FF D8 FF
+        if magic_bytes.startswith(b"\xFF\xD8"):
+            return True
+        
+        # PNG: 89 50 4E 47 0D 0A 1A 0A
+        if magic_bytes.startswith(b"\x89PNG"):
+            return True
+        
+        # GIF: GIF87a o GIF89a
+        if magic_bytes.startswith(b"GIF8"):
+            return True
+        
+        # WebP: RIFF....WEBP
+        if magic_bytes.startswith(b"RIFF") and b"WEBP" in magic_bytes[:32]:
+            return True
+        
+        # BMP: BM header
+        if magic_bytes.startswith(b"BM"):
+            return True
+        
+        # TIFF: II (little-endian) o MM (big-endian)
+        if magic_bytes.startswith(b"II\x2A\x00") or magic_bytes.startswith(b"MM\x00\x2A"):
+            return True
+        
+        # HEIC/HEIF: ftyp box tipico
+        if b"ftyp" in magic_bytes[:32] or b"heic" in magic_bytes[:64]:
+            return True
+    
+    return False
+
+
+@router.post("/projects/{project_id}/media", response_model=None)
 @limiter.limit("5/minute")
 async def upload_media(
     request: Request,
     project_id: str,
-    files: list[UploadFile] = File(...),
+    files: Annotated[List[UploadFile], File(...)],
     source: str = Form("local"),
 ) -> dict:
     try:
@@ -135,59 +269,58 @@ async def upload_media(
             detail=f"Troppi file: massimo {MAX_FILES_PER_REQUEST} per richiesta"
         )
 
-    # APPROCCIO A: due pass - prima validazione pura (nessuna scrittura),
-    # poi scrittura solo se tutti i file sono validi
-    validated_files: list[tuple[str, bytes, str]] = []  # (safe_name, content, ext)
-    
-    # Prima pass: validazione estensione/size/magic-bytes per tutti i file
-    for f in files:
-        ext = Path(f.filename or "").suffix.lower()
-        
-        # SECURITY: validazione estensione
-        if ext not in ALLOWED_VIDEO_EXTS and ext not in ALLOWED_IMAGE_EXTS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Estensione non supportata: {ext}"
-            )
-        
-        # SECURITY: lettura contenuto e validazione dimensione
-        content = await f.read()
-        if len(content) > MAX_FILE_SIZE_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"File troppo grande: massimo {MAX_FILE_SIZE_BYTES // (1024*1024)}MB"
-            )
-        
-        # SECURITY: validazione magic bytes
-        if not _validate_magic_bytes(content, ext):
-            raise HTTPException(
-                status_code=400,
-                detail="Contenuto file non corrisponde all'estensione"
-            )
-        
-        safe_name = f"{uuid.uuid4().hex[:8]}{ext}"
-        validated_files.append((safe_name, content, ext))
-    
-    # Seconda pass: scrittura su disco e popolamento staging
-    # (eseguita solo se tutti i file hanno passato la validazione)
+    # APPROCCIO C: streaming singolo - valida e scrivi contemporaneamente
+    # Ogni file viene validato e scritto in un'unica pass
     media_dir = state_store.media_dir(project_id)
     media_dir.mkdir(parents=True, exist_ok=True)
     
     staging = []
-    for safe_name, content, ext in validated_files:
-        dest = media_dir / safe_name
-        dest.write_bytes(content)
-        staging.append({"path": str(dest), "source": source, "drive_file_id": None})
+    uploaded_files: list[Path] = []  # Track files per cleanup in caso di errore
+    
+    try:
+        for f in files:
+            dest = media_dir / f"{uuid.uuid4().hex[:8]}{Path(f.filename or '').suffix.lower()}"
+            safe_name, size = await _validate_and_stream_file(
+                f, 
+                ALLOWED_VIDEO_EXTS | ALLOWED_IMAGE_EXTS,
+                dest
+            )
+            # Aggiorna il nome del file destination con il safe_name
+            final_dest = media_dir / safe_name
+            if dest != final_dest:
+                dest.rename(final_dest)
+            
+            uploaded_files.append(final_dest)
+            staging.append({"path": str(final_dest), "source": source, "drive_file_id": None})
 
-    state["media_staging"] = staging
-    state = await intake.run(state)
-    # M2: ogni nuovo media viene subito normalizzato (fit cover/contain,
-    # background blur/solid, order_index contigui) — architettura sez. 5 Agente 1.
-    state = await normalizer.run(state)
-    # M3: durate foto + trim video (deterministico per id, non tocca ordine/fit).
-    state = await sequence.run(state)
-    state_store.save_state(state)
-    return state
+        state["media_staging"] = staging
+        state = await intake.run(state)
+        # M2: ogni nuovo media viene subito normalizzato (fit cover/contain,
+        # background blur/solid, order_index contigui) — architettura sez. 5 Agente 1.
+        state = await normalizer.run(state)
+        # M3: durate foto + trim video (deterministico per id, non tocca ordine/fit).
+        state = await sequence.run(state)
+        state_store.save_state(state)
+        return state
+        
+    except HTTPException:
+        # Cleanup: rimuovi tutti i file caricati finora in caso di errore
+        for uploaded_file in uploaded_files:
+            try:
+                if uploaded_file.exists():
+                    uploaded_file.unlink()
+            except Exception:
+                pass
+        raise
+    except Exception as e:
+        # Cleanup per errori non-HTTP
+        for uploaded_file in uploaded_files:
+            try:
+                if uploaded_file.exists():
+                    uploaded_file.unlink()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"Errore interno durante l'upload: {str(e)}")
 
 
 def _validate_magic_bytes(content: bytes, ext: str) -> bool:

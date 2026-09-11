@@ -9,11 +9,13 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
+from app.ratelimit import limiter
 
 from app.api.routes import router
 from app.api.drive import router as drive_router
@@ -24,8 +26,7 @@ from app.jobs import manager as jobs
 from app.auth import verify_api_key
 
 
-# Rate limiting globale
-limiter = Limiter(key_func=get_remote_address)
+# Rate limiting globale (non modificare, usato internamente da SlowAPI)
 
 
 def _parse_cors_origins() -> list[str]:
@@ -69,12 +70,23 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Auth middleware: opzionale, attiva solo se API_KEY è impostata
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    # Skip health check e docs
-    if (request.url.path.startswith("/api/health") 
-        or request.url.path.startswith("/docs")
+    # Skip docs e openapi (sempre pubblici per documentazione)
+    if (request.url.path.startswith("/docs")
         or request.url.path.startswith("/openapi.json")):
         return await call_next(request)
-    await verify_api_key(request)
+    
+    try:
+        # Verifica API key (include skip automatico per OPTIONS preflight)
+        await verify_api_key(request)
+    except HTTPException as exc:
+        # Ritorna direttamente la risposta di errore senza chiamare call_next
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=exc.headers,
+        )
+    
     return await call_next(request)
 
 app.add_middleware(

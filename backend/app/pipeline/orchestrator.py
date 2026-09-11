@@ -15,6 +15,7 @@ avanzamento M8). Il rendering resta idempotente: stesso input, stesso video.
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
 from typing import Awaitable, Callable
 
@@ -31,6 +32,72 @@ from app.agents import (
 )
 
 AgentFn = Callable[[dict], Awaitable[dict]]
+
+
+def _copy_for_parallel_task(state: dict, extra_keys: dict | None = None) -> dict:
+    """Crea una copia isolata dello stato per un task parallelo.
+    
+    Copia solo le chiavi necessarie per l'esecuzione dell'agente,
+    mantenendo separati pipeline_log e errors per evitare race condition.
+    """
+    # Copia profonda delle chiavi critiche che l'agente potrebbe modificare
+    task_state = {
+        "media": copy.deepcopy(state.get("media", [])),
+        "timeline": copy.deepcopy(state.get("timeline", [])),
+        "project_id": state.get("project_id"),
+        "project_dir": state.get("project_dir"),
+    }
+    
+    # Aggiungi chiavi specifiche se fornite
+    if extra_keys:
+        for key, value in extra_keys.items():
+            if isinstance(value, (dict, list)):
+                task_state[key] = copy.deepcopy(value)
+            else:
+                task_state[key] = value
+    
+    # Inizializza strutture separate per questo task
+    task_state["pipeline_log"] = []
+    task_state["errors"] = []
+    
+    return task_state
+
+
+def _merge_parallel_results(base_state: dict, seq_result: dict, aud_result: dict) -> dict:
+    """Unisce i risultati di task paralleli in modo deterministico.
+    
+    Preserva:
+    - Tutti gli entry di pipeline_log da entrambi i task
+    - Tutti gli errori da entrambi i task
+    - I dati specifici di ciascun task (es. audio da aud_result)
+    - Lo stato base aggiornato da sequence
+    """
+    # Parti dallo stato base aggiornato da sequence
+    merged = copy.deepcopy(seq_result)
+    
+    # Unisci i pipeline_log mantenendo l'ordine temporale
+    merged["pipeline_log"] = (
+        seq_result.get("pipeline_log", []) + aud_result.get("pipeline_log", [])
+    )
+    # Ordina per timestamp per garantire consistenza
+    merged["pipeline_log"].sort(key=lambda x: x.get("ts", 0))
+    
+    # Unisci tutti gli errori da entrambi i task
+    merged["errors"] = (
+        seq_result.get("errors", []) + aud_result.get("errors", [])
+    )
+    
+    # Aggiungi i dati specifici di audio_analysis
+    if "audio" in aud_result:
+        merged["audio"] = aud_result["audio"]
+    elif "audio" in seq_result:
+        # Mantieni audio da seq_result se aud_result non ne ha prodotto
+        pass
+    else:
+        # Assicurati che la chiave esista anche se vuota
+        merged["audio"] = None
+    
+    return merged
 
 
 async def _run_stage(state: dict, name: str, fn: AgentFn) -> dict:
@@ -93,19 +160,35 @@ async def run_qa_with_retry(state: dict) -> dict:
 async def run_pipeline(project_state: dict) -> dict:
     """Esegue il grafo completo. In M0 tutti gli agenti sono passthrough,
     quindi e' un drill di integrazione del grafo: verifica wiring e log,
-    non la logica di montaggio."""
+    non la logica di montaggio.
+    
+    Correzione race condition: i task paralleli (sequence e audio_analysis)
+    ricevono copie isolate dello stato per evitare modifiche concorrenti
+    allo stesso oggetto mutabile. I risultati vengono uniti deterministicamente.
+    """
     state = project_state
+    
+    # Inizializza strutture condivise se non esistono
+    if "pipeline_log" not in state:
+        state["pipeline_log"] = []
+    if "errors" not in state:
+        state["errors"] = []
 
     state = await _run_stage(state, "intake", intake.run)
     state = await _run_stage(state, "normalizer", normalizer.run)
 
-    seq_task = asyncio.create_task(_run_stage(state, "sequence", sequence.run))
+    # Esecuzione parallela con stati isolati per evitare race condition
+    seq_state_input = _copy_for_parallel_task(state)
+    aud_state_input = _copy_for_parallel_task(state)
+    
+    seq_task = asyncio.create_task(_run_stage(seq_state_input, "sequence", sequence.run))
     aud_task = asyncio.create_task(
-        _run_stage(state, "audio_analysis", audio_analysis.run)
+        _run_stage(aud_state_input, "audio_analysis", audio_analysis.run)
     )
-    seq_state, aud_state = await asyncio.gather(seq_task, aud_task)
-    # merge: sequence tocca le durate dei media; audio_analysis tocca "audio"
-    state = {**seq_state, "audio": aud_state.get("audio", seq_state.get("audio"))}
+    seq_result, aud_result = await asyncio.gather(seq_task, aud_task)
+    
+    # Merge deterministico dei risultati paralleli
+    state = _merge_parallel_results(state, seq_result, aud_result)
 
     state = await _run_stage(state, "edit_director", edit_director.run)
     state = await _run_stage(state, "clip_overrides", clip_overrides.run)

@@ -7,13 +7,13 @@ import uuid
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from app.api.routes import (
+from app.api.common import (
     ALLOWED_IMAGE_EXTS,
     ALLOWED_VIDEO_EXTS,
     MAX_FILE_SIZE_BYTES,
-    _ensure_path_within_project,
-    _get_state_or_404,
-    _validate_magic_bytes,
+    ensure_path_within_project,
+    get_state_or_404,
+    validate_magic_bytes,
 )
 from app.agents import intake, normalizer, sequence
 from app.pipeline import state as state_store
