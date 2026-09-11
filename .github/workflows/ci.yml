@@ -17,11 +17,15 @@ jobs:
           python-version: "3.11"
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - name: Install backend dependencies
+      - name: Install pip-tools
+        run: python -m pip install pip-tools
+      - name: Install backend dependencies (pinned versions)
         run: python -m pip install -r backend/requirements.txt
-      - name: Run backend tests
+      - name: Verify requirements.in compiles correctly
+        run: cd backend && pip-compile requirements.in --output-file requirements.txt --dry-run
+      - name: Run backend tests with coverage
         working-directory: backend
-        run: python -m pytest -q
+        run: pytest --cov=app --cov-report=term --cov-fail-under=50
 
   frontend:
     runs-on: ubuntu-latest
@@ -42,3 +46,18 @@ jobs:
       - name: Production build
         working-directory: frontend
         run: npm run build
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build backend Docker image
+        run: docker build -t app-video-backend ./backend
+      
+      - name: Build frontend Docker image
+        run: docker build -t app-video-frontend ./frontend
+      
+      - name: Verify docker-compose configuration
+        run: docker-compose config

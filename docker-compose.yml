@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: app-video-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Volumi per lo sviluppo: mount del codice sorgente
+      - ./backend:/app
+      # Volume persistente per i dati dei progetti
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: app-video-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      # Volumi per lo sviluppo: mount del codice sorgente
+      - ./frontend:/app
+      # Evita di sovrascrivere node_modules e .next nel container
+      - /app/node_modules
+      - /app/.next
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
