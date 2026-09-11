@@ -274,17 +274,26 @@ async def test_render_worker_kill_cleanup(isolated_project, tmp_path):
 
 
 def test_ffmpeg_probe_timeout_handling():
-    """Verifica che ffmpeg.probe gestisca timeout senza bloccare."""
+    """Verifica che ffprobe gestisca timeout senza bloccare su file corrotti."""
     # Crea file corrotto che causerebbe hang senza timeout
     fake_file = Path("/tmp/fake_corrupt_media.mp4")
     fake_file.write_bytes(b"\x00\x00\x00 invalid media data")
     
     start = time.time()
     try:
-        info = ffmpeg.probe(str(fake_file), timeout=2.0)
-        # Se probe ha successo su file corrotto, è inaspettato ma non errore
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(fake_file)],
+            capture_output=True, text=True, timeout=2.0
+        )
+        # Un file corrotto dovrebbe fallire (returncode != 0 o stdout vuoto)
+        assert r.returncode != 0 or not r.stdout.strip(), \
+            f"File corrotto non ha fallito: {r.stdout}"
+    except subprocess.TimeoutExpired:
+        # Timeout è accettabile: meglio che bloccare indefinitamente
+        pass
     except Exception:
-        # Eccezione attesa per file corrotto
+        # Altre eccezioni sono accettate per file corrotti
         pass
     
     elapsed = time.time() - start
