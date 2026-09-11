@@ -19,6 +19,8 @@ import copy
 import time
 from typing import Awaitable, Callable
 
+import logging
+
 from app.agents import (
     audio_analysis,
     edit_director,
@@ -30,6 +32,8 @@ from app.agents import (
     sequence,
     timeline_compiler,
 )
+
+logger = logging.getLogger(__name__)
 
 AgentFn = Callable[[dict], Awaitable[dict]]
 
@@ -101,12 +105,16 @@ def _merge_parallel_results(base_state: dict, seq_result: dict, aud_result: dict
 
 
 async def _run_stage(state: dict, name: str, fn: AgentFn) -> dict:
+    stage_logger = logging.getLogger(f"pipeline.{name}")
+    stage_logger.info("Stage %s avviato", name)
     state["pipeline_log"].append(
         {"stage": name, "status": "running", "ts": time.time()}
     )
     try:
         state = await fn(state)
+        stage_logger.info("Stage %s completato", name)
     except Exception as exc:  # un errore di agente non deve corrompere lo state
+        stage_logger.error("Stage %s fallito: %s", name, exc, exc_info=True)
         state["errors"].append({"stage": name, "message": str(exc)})
         state["pipeline_log"].append(
             {"stage": name, "status": "failed", "ts": time.time()}

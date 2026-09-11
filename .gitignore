@@ -20,21 +20,20 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.coverage.*
 
 # Environment
 .env
 .env.local
 .env.*
-
-# Testing
-.coverage
-htmlcov/
-.tox/
-.nox/
-coverage.xml
-*.cover
-.hypothesis/
+.venv/
+venv/
+ENV/
 
 # IDE
 .vscode/
@@ -46,13 +45,4 @@ coverage.xml
 # OS
 .DS_Store
 Thumbs.db
-
-# Logs
-*.log
-
-# Dependencies
-.venv/
-venv/
-.pytest_cache/
-.mypy_cache/
 ```

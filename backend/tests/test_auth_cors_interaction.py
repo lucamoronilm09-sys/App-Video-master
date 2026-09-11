@@ -84,34 +84,25 @@ class TestAuthCorsInteraction:
 
     def test_api_key_attiva_get_senza_key(self):
         """GET con API_KEY attiva ma senza chiave dovrebbe fallire con 401."""
-        from fastapi import HTTPException
         client = get_client(api_key="test-secret-key-123")
         
-        try:
-            response = client.get("/api/health")
-            assert False, "Avrebbe dovuto sollevare HTTPException"
-        except Exception as e:
-            # Con raise_server_exceptions=True, l'HTTPException viene sollevata
-            assert hasattr(e, 'status_code')
-            assert e.status_code == 401
-            assert "API key" in str(e).lower()
+        # Il middleware ritorna direttamente JSONResponse con status 401
+        # invece di sollevare HTTPException, quindi non serve raise_server_exceptions
+        response = client.get("/api/health")
+        assert response.status_code == 401
+        assert "api key" in response.json().get("detail", "").lower()
 
     def test_api_key_attiva_get_con_key_errata(self):
         """GET con API_KEY attiva e chiave errata dovrebbe fallire con 401."""
-        from fastapi import HTTPException
         client = get_client(api_key="test-secret-key-123")
         
-        try:
-            response = client.get(
-                "/api/health",
-                headers={"X-API-Key": "wrong-key"}
-            )
-            assert False, "Avrebbe dovuto sollevare HTTPException"
-        except Exception as e:
-            # Con raise_server_exceptions=True, l'HTTPException viene sollevata
-            assert hasattr(e, 'status_code')
-            assert e.status_code == 401
-            assert "API key" in str(e).lower()
+        # Il middleware ritorna direttamente JSONResponse con status 401
+        response = client.get(
+            "/api/health",
+            headers={"X-API-Key": "wrong-key"}
+        )
+        assert response.status_code == 401
+        assert "api key" in response.json().get("detail", "").lower()
 
     def test_options_senza_api_key(self):
         """OPTIONS (CORS preflight) senza API key dovrebbe sempre passare."""

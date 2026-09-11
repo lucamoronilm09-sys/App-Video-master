@@ -149,7 +149,7 @@ def drive_disconnect() -> dict:
 def drive_files(project_id: str, folder_id: str = "root",
                 page_token: str | None = None, page_size: int = 100,
                 shared: bool = False) -> dict:
-    _get_state_or_404(project_id)
+    get_state_or_404(project_id)
     effective_shared = shared or folder_id == "shared"
     try:
         service = dc.get_drive_service()

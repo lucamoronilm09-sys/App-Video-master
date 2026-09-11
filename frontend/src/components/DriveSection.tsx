@@ -52,7 +52,7 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
   const loadFolder = useCallback(async (id: string, shared = false, pageToken?: string) => {
     setBusy(true); setError(null);
     try {
-      const data = await driveListFiles(projectId, id, pageToken, shared);
+      const data = await driveListFiles(projectId, { folderId: id, pageToken, shared });
       setFolderId(data.current.id);
       setFolderName(data.current.name);
       setNextPageToken(data.nextPageToken);

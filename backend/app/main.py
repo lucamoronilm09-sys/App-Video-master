@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -15,6 +16,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from app.logging_config import setup_logging, get_logger, set_request_id
 from app.ratelimit import limiter
 
 from app.api.routes import router
@@ -24,6 +26,11 @@ from app.api.project_routes import router as project_router
 from app.config import PROJECTS_DIR
 from app.jobs import manager as jobs
 from app.auth import verify_api_key
+
+
+# Configura logging all'avvio
+setup_logging()
+logger = get_logger(__name__)
 
 
 # Rate limiting globale (non modificare, usato internamente da SlowAPI)
@@ -53,12 +60,13 @@ async def lifespan(app: FastAPI):
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     recovered = jobs.recover()
     if recovered:
-        print(f"[jobs] {recovered} job riaccodati dopo riavvio")
+        logger.info("%d job riaccodati dopo riavvio", recovered)
     worker = asyncio.create_task(jobs.worker_loop())
     try:
         yield
     finally:
         worker.cancel()
+        logger.info("Worker loop cancellato durante shutdown")
 
 
 app = FastAPI(title="AI Video Maker", version="1.0.0", lifespan=lifespan)
@@ -70,6 +78,10 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Auth middleware: opzionale, attiva solo se API_KEY è impostata
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
+    # Genera request_id per tracciamento
+    request_id = str(uuid.uuid4())[:8]
+    set_request_id(request_id)
+    
     # Skip docs e openapi (sempre pubblici per documentazione)
     if (request.url.path.startswith("/docs")
         or request.url.path.startswith("/openapi.json")):
@@ -81,6 +93,10 @@ async def auth_middleware(request: Request, call_next):
     except HTTPException as exc:
         # Ritorna direttamente la risposta di errore senza chiamare call_next
         from fastapi.responses import JSONResponse
+        logger.warning(
+            "Richiesta %s bloccata: %s %s - %d",
+            request_id, request.method, request.url.path, exc.status_code
+        )
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail},

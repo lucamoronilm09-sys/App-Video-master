@@ -103,11 +103,45 @@ def state_path(project_id: str) -> Path:
 
 
 def save_state(state: dict) -> dict:
-    ensure_project_dirs(state["project_id"])
+    """Salva lo stato del progetto in modo atomico.
+    
+    Usa write+rename per garantire atomicità (evita corruzione su crash).
+    """
+    from app.logging_config import get_logger, safe_log_dict
+    
+    logger = get_logger(__name__)
+    project_id = state["project_id"]
+    ensure_project_dirs(project_id)
     state["updated_at"] = time.time()
-    state_path(state["project_id"]).write_text(
-        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    
+    p = state_path(project_id)
+    tmp = p.with_suffix(".tmp.json")
+    
+    try:
+        # Log sicuro senza dati sensibili
+        log_data = safe_log_dict({
+            "project_id": project_id,
+            "media_count": len(state.get("media", [])),
+            "has_render": bool(state.get("render_manifest")),
+        })
+        logger.debug("Salvataggio stato per %s: %s", project_id, log_data)
+        
+        # Scrittura atomica: scrivi su tmp, poi rename
+        tmp.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        tmp.replace(p)
+        logger.info("Stato salvato per progetto %s", project_id)
+    except Exception as exc:
+        logger.error("Errore nel salvataggio stato per %s: %s", project_id, exc, exc_info=True)
+        # Cleanup tmp se esiste
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
+        raise
+    
     return state
 
 
