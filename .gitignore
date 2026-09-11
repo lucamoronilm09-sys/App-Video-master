@@ -1,39 +1,37 @@
-```gitignore
-# Python cache files
+```
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# Python virtual environments
+.Python
+env/
 venv/
 .venv/
-env/
-
-# Tests cache
-.pytest_cache/
+.ENV
+.venv.bak/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
 .coverage
-coverage/
+htmlcov/
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Docker
+Dockerfile
+docker-compose.yml
+
+# Dependencies
+requirements.txt
+requirements.in
 
 # Logs
 *.log
 
-# Temporary files
-*.tmp
-*.swp
-*.swo
-
-# Environment files
-.env
-.env.local
-*.env.*
-
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# Build artifacts
-build/
-dist/
-*.egg-info/
+# Coverage
+.coveragerc
 ```

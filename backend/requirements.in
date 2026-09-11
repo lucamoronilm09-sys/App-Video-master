@@ -1,0 +1,18 @@
+# Backend dependencies for AI Video Maker
+# Main dependencies
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+python-multipart>=0.0.6
+pillow>=10.0
+pillow-heif>=0.18
+numpy>=1.26
+google-api-python-client>=2.0
+google-auth-oauthlib>=1.0
+opencv-python-headless>=4.10
+
+# Dev/Test dependencies
+pytest>=8.0
+pytest-asyncio>=0.23
+httpx>=0.27
+pytest-cov>=4.0
