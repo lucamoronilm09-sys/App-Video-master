@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { Timeline } from '../Timeline';
 import type { MediaItem } from '@/lib/api';
 
@@ -106,7 +105,6 @@ describe('Timeline', () => {
   });
 
   it('calls onDelete when delete button is clicked', async () => {
-    const user = userEvent.setup();
     render(
       <Timeline
         projectId="test-id"

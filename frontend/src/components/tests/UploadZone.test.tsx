@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { UploadZone } from '../UploadZone';
 
 // Mock del modulo api
@@ -22,8 +21,7 @@ describe('UploadZone', () => {
     expect(screen.getByText(/Trascina foto\/video qui/i)).toBeInTheDocument();
   });
 
-  it('shows progress bar when uploading', async () => {
-    // Questo test richiede un'implementazione più avanzata per simulare l'upload
+  it('shows upload control when ready', () => {
     render(<UploadZone projectId="test-id" onUploadComplete={mockOnUploadComplete} />);
     const zone = screen.getByRole('button');
     expect(zone).toBeInTheDocument();
