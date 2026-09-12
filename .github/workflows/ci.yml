@@ -7,7 +7,7 @@ on:
     branches: ["main"]
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   APP_ENV: testing
@@ -70,28 +70,9 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Switch to actual PR head branch
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        run: |
-          git fetch origin "${GITHUB_HEAD_REF}:${GITHUB_HEAD_REF}"
-          git checkout "${GITHUB_HEAD_REF}"
-
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
-
-      - name: Remediate npm vulnerabilities
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        working-directory: frontend
-        run: |
-          npm audit fix --force
-          if ! git diff --quiet -- package.json package-lock.json; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add package.json package-lock.json
-            git commit -m "chore(deps): remediate npm vulnerabilities"
-            git push origin "HEAD:${GITHUB_HEAD_REF}"
-          fi
 
       - name: Verify npm audit
         working-directory: frontend
