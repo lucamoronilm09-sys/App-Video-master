@@ -148,6 +148,11 @@ def _render_segmented(manifest: dict[str, Any], job_id: str | None) -> Path:
     input_paths = _input_paths_from_args(list(manifest.get("args") or []))
     if len(input_paths) < len(segments): raise RuntimeError("Numero input FFmpeg insufficiente per il render segmentato")
     work = output.parent / f".render_parts_{job_id or int(time.time())}"; work.mkdir(parents=True, exist_ok=True)
+    
+    # Logger dedicato per il render segmentato
+    render_logger = logging.getLogger(f"pipeline.render.segmented.{job_id or 'unknown'}")
+    render_logger.info("Avvio render segmentato in %s", work)
+    
     try:
         rendered: list[Path] = []; durations: list[float] = []; total = float(manifest.get("total_sec") or 1.0); completed = 0.0
         for i, segment in enumerate(segments):
@@ -183,8 +188,20 @@ def _render_segmented(manifest: dict[str, Any], job_id: str | None) -> Path:
         _validate_video(current, float(manifest.get("total_sec") or current_duration)); _decode_probe(current)
         output.parent.mkdir(parents=True, exist_ok=True); os.replace(current, output)
         if job_id: prog.set(job_id, 0.99, "render completato")
+        render_logger.info("Render segmentato completato con successo: %s", output)
         return output
-    finally: shutil.rmtree(work, ignore_errors=True)
+    except Exception as exc:
+        render_logger.error("Render segmentato fallito: %s", exc, exc_info=True)
+        raise
+    finally:
+        # Cleanup directory di lavoro con logging appropriato
+        if work.exists():
+            try:
+                removed_count = sum(1 for _ in work.rglob("*"))
+                shutil.rmtree(work)
+                render_logger.info("Cleanup directory render %s (%d file rimossi)", work, removed_count)
+            except Exception as cleanup_exc:
+                render_logger.warning("Errore durante cleanup directory render %s: %s", work, cleanup_exc)
 
 
 async def run(project_state: dict) -> dict:

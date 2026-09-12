@@ -1,0 +1,106 @@
+# Docker Compose per AI Video Maker - Configurazione Production
+# Utilizzo: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# 
+# Caratteristiche production:
+# - Nessuna mount del codice sorgente
+# - Ottimizzazioni di performance
+# - Security hardening
+# - Resource limits
+# - Logging strutturato
+# - Restart policy aggressiva
+# - Healthcheck ottimizzati
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: base  # Usa lo stage base (production-ready)
+    container_name: app-video-backend-prod
+    ports:
+      - "8000:8000"
+    volumes:
+      # Volume persistente per i dati dei progetti (named volume)
+      - app-data:/app/data:rw
+    env_file:
+      - .env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - APP_ENV=production
+      - LOG_LEVEL=INFO
+      - NODE_ENV=production
+      # Numero di worker uvicorn (override da .env se necessario)
+      # - UVICORN_WORKERS=4
+    restart: always
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    # Resource limits per produzione
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    # Security: read-only root filesystem tranne per /app/data e /tmp
+    # read_only: true
+    # tmpfs:
+    #   - /tmp:size=100M
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production  # Usa lo stage production ottimizzato
+    container_name: app-video-frontend-prod
+    ports:
+      - "3000:3000"
+    volumes:
+      # Nessun mount del codice - solo volumi per cache se necessario
+      - frontend-cache:/app/.next/cache:rw
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: always
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    # Resource limits per produzione
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  # Named volumes per persistenza dati production
+  app-data:
+    driver: local
+  frontend-cache:
+    driver: local

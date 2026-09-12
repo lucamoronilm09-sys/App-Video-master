@@ -21,19 +21,28 @@ wheels/
 .installed.cfg
 *.egg
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.coverage.*
-
 # Environment
 .env
 .env.local
 .env.*
-.venv/
-venv/
-ENV/
+
+# Dependencies
+node_modules/
+
+# Docker
+.dockerenv
+Dockerfile.local
+Dockerfile.prod
+
+# Logs
+*.log
+
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
+.tox/
+.nox/
 
 # IDE
 .vscode/
