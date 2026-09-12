@@ -4,6 +4,8 @@
 #
 #    pip-compile --no-index --output-file=requirements.txt requirements.in
 #
+aiofiles==25.1.0
+    # via -r requirements.in
 annotated-doc==0.0.5
     # via fastapi
 annotated-types==0.8.0
