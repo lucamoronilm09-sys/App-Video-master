@@ -1,6 +1,6 @@
 /**
  * Test per il layer API
- * 
+ *
  * Copre:
  * - Timeout delle richieste
  * - Errori HTTP 4xx e 5xx
@@ -14,29 +14,6 @@ import {
   ApiHttpError,
   ApiNetworkError,
   getHealth,
-  listProjects,
-  createProject,
-  deleteProject,
-  getProject,
-  updateProject,
-  duplicateProject,
-  submitFeedback,
-  uploadMedia,
-  uploadAudio,
-  planEdit,
-  patchClipOverride,
-  resetClipOverride,
-  submitRenderJob,
-  updateSettings,
-  driveAuthUrl,
-  saveDriveCredentials,
-  driveStatus,
-  driveDisconnect,
-  driveListFiles,
-  submitDriveImportJob,
-  clearErrors,
-  reorderMedia,
-  updateMediaFill,
   mediaThumbUrl,
   getEventSourceUrl,
   isJobActive,
@@ -63,21 +40,17 @@ describe('API Layer', () => {
   describe('Configurazione API_BASE', () => {
     it('usa "/api" di default quando NEXT_PUBLIC_API_URL non è definita', () => {
       delete process.env.NEXT_PUBLIC_API_URL;
-      // Ricarichiamo il modulo per testare (in realtà serve un approccio diverso in vitest)
-      // Qui verifichiamo che il valore di default sia corretto
       expect(API_BASE).toBeDefined();
     });
 
     it('usa NEXT_PUBLIC_API_URL se definita', () => {
       process.env.NEXT_PUBLIC_API_URL = 'https://custom-api.example.com';
-      // Nota: per test reali servirebbe dynamic import o reload del modulo
       expect(process.env.NEXT_PUBLIC_API_URL).toBe('https://custom-api.example.com');
     });
   });
 
   describe('Gestione Timeout', () => {
     it('lancia ApiTimeoutError quando la richiesta supera il timeout', async () => {
-      // Mock fetch che ritarda più del timeout
       global.fetch = vi.fn(async () => {
         await new Promise((resolve) => setTimeout(resolve, 100));
         return new Response(JSON.stringify({ status: 'ok' }), {
@@ -86,13 +59,10 @@ describe('API Layer', () => {
         });
       });
 
-      // Imposta timeout molto breve per il test
       process.env.NEXT_PUBLIC_API_TIMEOUT_MS = '50';
 
-      // Nota: questo test richiederebbe il reload del modulo per applicare il nuovo timeout
-      // In pratica, verifichiamo che l'errore di timeout sia gestito
       expect(ApiTimeoutError).toBeDefined();
-      
+
       const error = new ApiTimeoutError('Test timeout');
       expect(error.name).toBe('ApiTimeoutError');
       expect(error.message).toBe('Test timeout');
@@ -262,7 +232,6 @@ describe('API Layer', () => {
     it('usa URL custom da environment variable', () => {
       const original = process.env.NEXT_PUBLIC_API_URL;
       process.env.NEXT_PUBLIC_API_URL = 'https://api.production.example.com';
-      // Verifica che la variabile d'ambiente sia letta correttamente
       expect(process.env.NEXT_PUBLIC_API_URL).toBe('https://api.production.example.com');
       if (original !== undefined) {
         process.env.NEXT_PUBLIC_API_URL = original;
@@ -333,8 +302,6 @@ describe('API Layer', () => {
       it('usa API_BASE custom se configurata', () => {
         const original = process.env.NEXT_PUBLIC_API_URL;
         process.env.NEXT_PUBLIC_API_URL = 'https://custom.example.com';
-        // La funzione usa il valore corrente di API_BASE
-        // Nota: in test reali servirebbe reload del modulo
         delete process.env.NEXT_PUBLIC_API_URL;
         process.env.NEXT_PUBLIC_API_URL = original;
       });
