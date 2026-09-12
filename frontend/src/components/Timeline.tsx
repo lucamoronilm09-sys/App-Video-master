@@ -137,13 +137,13 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, onDelete, 
 
   return (
     <div className="mt-8">
-      <input ref={replaceInputRef} type="file" accept={ACCEPT_MEDIA} className="hidden" onChange={handleReplaceChange} />
+      <input ref={replaceInputRef} type="file" accept={ACCEPT_MEDIA} className="hidden" onChange={handleReplaceChange} aria-label="Seleziona file per sostituire la clip" />
       <div className="mb-3 flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">Timeline ({sorted.length})</h3>
+        <h3 id="timeline-heading" className="text-sm font-semibold uppercase tracking-wider text-slate-400">Timeline ({sorted.length})</h3>
         <p className="text-xs text-slate-500">Trascina le clip per cambiare posizione · sostituisci i contenuti</p>
       </div>
-      {error && <p className="mb-3 rounded-lg border border-rose-800 bg-rose-900/30 px-3 py-2 text-sm text-rose-200">{error}</p>}
-      <ol className={`flex gap-3 overflow-x-auto pb-3 ${busy || deletingId || replacingId ? "pointer-events-none opacity-60" : ""}`} aria-label="Timeline clip">
+      {error && <p className="mb-3 rounded-lg border border-rose-800 bg-rose-900/30 px-3 py-2 text-sm text-rose-200" role="alert">{error}</p>}
+      <ol className={`flex gap-3 overflow-x-auto pb-3 ${busy || deletingId || replacingId ? "pointer-events-none opacity-60" : ""}`} aria-label="Timeline clip" aria-labelledby="timeline-heading" role="list">
         {sorted.map((m, i) => {
           const isDragged = dragId === m.id;
           const isOver = overId === m.id;
@@ -151,26 +151,26 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, onDelete, 
           const isDeleting = deletingId === m.id;
           const isReplacing = replacingId === m.id;
           return (
-            <li key={m.id} draggable={!busy && !deletingId && !replacingId && !isTouchDragging} onDragStart={e => handleDragStart(e, m.id)} onDragOver={e => handleDragOver(e, m.id)} onDrop={e => void handleDrop(e, m.id)} onDragEnd={handleDragEnd} onTouchStart={e => handleTouchStart(e, m.id, i)} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} aria-label={`Clip ${i + 1} di ${sorted.length}. Trascina per cambiare posizione`} className={`relative w-44 shrink-0 overflow-hidden rounded-lg border bg-black ${isOver ? "border-emerald-400 ring-2 ring-emerald-400/50" : "border-slate-700"} ${isDragged ? "opacity-40" : ""} ${busy ? "" : "cursor-grab active:cursor-grabbing"} ${isTouchDragging ? "scale-110 shadow-2xl opacity-80 z-20 bg-gray-800" : ""}`}>
-              <span className="absolute left-1.5 top-1.5 z-10 rounded bg-black/70 px-1.5 py-0.5 text-xs font-bold text-white">{i + 1}</span>
+            <li key={m.id} draggable={!busy && !deletingId && !replacingId && !isTouchDragging} onDragStart={e => handleDragStart(e, m.id)} onDragOver={e => handleDragOver(e, m.id)} onDrop={e => void handleDrop(e, m.id)} onDragEnd={handleDragEnd} onTouchStart={e => handleTouchStart(e, m.id, i)} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} aria-label={`Clip ${i + 1} di ${sorted.length}. Trascina per cambiare posizione`} aria-grabbed={isDragged} role="listitem" className={`relative w-44 shrink-0 overflow-hidden rounded-lg border bg-black ${isOver ? "border-emerald-400 ring-2 ring-emerald-400/50" : "border-slate-700"} ${isDragged ? "opacity-40" : ""} ${busy ? "" : "cursor-grab active:cursor-grabbing"} ${isTouchDragging ? "scale-110 shadow-2xl opacity-80 z-20 bg-gray-800" : ""}`}>
+              <span className="absolute left-1.5 top-1.5 z-10 rounded bg-black/70 px-1.5 py-0.5 text-xs font-bold text-white" aria-hidden="true">{i + 1}</span>
               <div className="aspect-video w-full bg-slate-900">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={mediaThumbUrl(projectId, m.id)} alt={m.type === "photo" ? "Anteprima foto" : "Fotogramma anteprima video"} draggable={false} loading="lazy" className={`h-full w-full ${m.fit_mode === "contain" ? "object-contain" : "object-cover"}`} />
+                <img src={mediaThumbUrl(projectId, m.id)} alt={m.type === "photo" ? `Anteprima foto ${i + 1}` : `Fotogramma anteprima video ${i + 1}`} draggable={false} loading="lazy" className={`h-full w-full ${m.fit_mode === "contain" ? "object-contain" : "object-cover"}`} />
               </div>
-              {m.type === "video" && <span className="absolute right-1.5 top-1.5 z-10 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white" title="Video senza audio nel render">VIDEO</span>}
-              {isReplacing && <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 text-xs text-white">Sostituzione…</div>}
+              {m.type === "video" && <span className="absolute right-1.5 top-1.5 z-10 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white" title="Video senza audio nel render" aria-hidden="true">VIDEO</span>}
+              {isReplacing && <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 text-xs text-white" role="status" aria-live="polite">Sostituzione…</div>}
 
               <div className="space-y-1 bg-slate-800/90 p-2 text-[11px] leading-tight text-slate-300">
                 <div className="flex items-center justify-between gap-1"><span className="truncate">{m.orientation}</span><DurationBadge m={m} /></div>
                 <SourceFpsBadge m={m} />
                 <div className="flex items-center gap-1">
                   <span className={`rounded px-1 py-0.5 text-[10px] font-medium ${m.fit_mode === "contain" ? "bg-sky-900/60 text-sky-300" : "bg-slate-700 text-slate-300"}`}>{m.fit_mode ?? "…"}</span>
-                  {m.fit_mode === "contain" && <button type="button" disabled={busy || !!deletingId || !!replacingId} onClick={() => void onToggleFill(m.id, m.background_fill === "blur" ? "solid_color" : "blur")} className="rounded bg-slate-700 px-1 py-0.5 text-[10px] text-slate-300 hover:bg-slate-600 disabled:opacity-50">{m.background_fill === "solid_color" ? "tinta" : "blur"}</button>}
+                  {m.fit_mode === "contain" && <button type="button" disabled={busy || !!deletingId || !!replacingId} onClick={() => void onToggleFill(m.id, m.background_fill === "blur" ? "solid_color" : "blur")} aria-label={`Cambia sfondo per clip ${i + 1}: ${m.background_fill === "solid_color" ? "usa blur" : "usa tinta unita"}`} className="rounded bg-slate-700 px-1 py-0.5 text-[10px] text-slate-300 hover:bg-slate-600 disabled:opacity-50">{m.background_fill === "solid_color" ? "tinta" : "blur"}</button>}
                 </div>
                 <div className="flex items-center justify-between pt-0.5">
                   <button type="button" disabled={busy || !!deletingId || !!replacingId || i === 0} onClick={() => void shift(m.id, -1)} aria-label={`Sposta clip ${i + 1} a sinistra`} className="rounded px-1.5 py-0.5 text-slate-400 hover:bg-slate-700 hover:text-white disabled:opacity-30">◀</button>
                   <button type="button" disabled={busy || !!deletingId || !!replacingId || i === sorted.length - 1} onClick={() => void shift(m.id, 1)} aria-label={`Sposta clip ${i + 1} a destra`} className="rounded px-1.5 py-0.5 text-slate-400 hover:bg-slate-700 hover:text-white disabled:opacity-30">▶</button>
-                  <button type="button" disabled={busy || !!deletingId || !!replacingId} onClick={() => openReplace(m.id)} aria-label={`Sostituisci ${m.type} ${i + 1}`} title="Sostituisci foto/video mantenendo la posizione" className="rounded px-1.5 py-0.5 text-sky-300 hover:bg-sky-500/10 disabled:opacity-30">↻</button>
+                  <button type="button" disabled={busy || !!deletingId || !!replacingId} onClick={() => openReplace(m.id)} aria-label={`Sostituisci clip ${i + 1}`} title="Sostituisci foto/video mantenendo la posizione" className="rounded px-1.5 py-0.5 text-sky-300 hover:bg-sky-500/10 disabled:opacity-30">↻</button>
                   <button type="button" disabled={busy || !!deletingId || !!replacingId} onClick={() => void handleDelete(m)} aria-label={`Elimina clip ${i + 1}`} title="Elimina caricamento" className="rounded px-1.5 py-0.5 text-rose-400 hover:bg-rose-500/10 disabled:opacity-30">{isDeleting ? "…" : "🗑"}</button>
                 </div>
               </div>

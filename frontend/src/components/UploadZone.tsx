@@ -137,6 +137,7 @@ export function UploadZone({ projectId, onUploadComplete, disabled }: UploadZone
         className="hidden"
         disabled={disabled || uploading}
         id="file-upload"
+        aria-label="Seleziona file da caricare"
       />
       <div
         onDragEnter={handleDrag}
@@ -147,6 +148,9 @@ export function UploadZone({ projectId, onUploadComplete, disabled }: UploadZone
         className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${dragActive ? "border-emerald-400 bg-emerald-900/20" : "border-slate-700 hover:border-slate-500"} ${disabled || uploading ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
         role="button"
         tabIndex={0}
+        aria-label={uploading ? `Caricamento in corso: ${progress}%` : "Area di caricamento file. Trascina foto o video qui, oppure premi Invio per selezionare i file."}
+        aria-busy={uploading}
+        aria-disabled={disabled || uploading}
         onKeyDown={e => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
@@ -155,18 +159,18 @@ export function UploadZone({ projectId, onUploadComplete, disabled }: UploadZone
         }}
       >
         {uploading ? (
-          <div className="space-y-3">
+          <div className="space-y-3" role="status" aria-live="polite">
             <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
               <div className="h-full bg-emerald-400 transition-all duration-300" style={{ width: `${progress}%` }} />
             </div>
             <p className="text-sm text-slate-400">Caricamento a lotti… {progress}%</p>
           </div>
         ) : error ? (
-          <div className="text-left">
+          <div className="text-left" role="alert">
             <p className="font-medium text-rose-400">{error.title}</p>
             <p className="text-sm text-rose-200">{error.detail}</p>
             {error.hint && <p className="text-xs text-slate-400 mt-2 p-2 rounded bg-slate-800/50 border border-slate-700">{error.hint}</p>}
-            <button onClick={(e) => { e.stopPropagation(); setError(null); }} className="text-xs underline text-rose-300 mt-2">Chiudi</button>
+            <button onClick={(e) => { e.stopPropagation(); setError(null); }} className="text-xs underline text-rose-300 mt-2" type="button">Chiudi</button>
           </div>
         ) : (
           <div className="space-y-2">
