@@ -42,7 +42,7 @@ export function AudioSection({ audio, tracks = [], onUpload, busy }: AudioSectio
         </button>
       </div>
 
-      <input ref={inputRef} type="file" accept="audio/*" multiple onChange={handleSelect} className="hidden" disabled={busy} />
+      <input ref={inputRef} type="file" accept="audio/*" multiple onChange={handleSelect} className="hidden" disabled={busy} aria-label="Seleziona file audio da caricare" />
 
       {!visibleTracks.length ? (
         <button type="button" disabled={busy} onClick={() => inputRef.current?.click()}
