@@ -23,8 +23,6 @@ jobs:
       DATA_DIR: /tmp/app-data
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref || github.ref }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -64,8 +62,6 @@ jobs:
       NEXT_PUBLIC_API_URL: /api
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref || github.ref }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -73,6 +69,12 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
+      - name: Switch to actual PR head branch
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          git fetch origin "${GITHUB_HEAD_REF}:${GITHUB_HEAD_REF}"
+          git checkout "${GITHUB_HEAD_REF}"
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -112,8 +114,6 @@ jobs:
     needs: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref || github.ref }}
 
       - name: Build backend Docker image
         run: docker build -t app-video-backend ./backend
@@ -139,8 +139,6 @@ jobs:
     name: Docker Integration Test
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref || github.ref }}
 
       - name: Start test environment
         run: docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
