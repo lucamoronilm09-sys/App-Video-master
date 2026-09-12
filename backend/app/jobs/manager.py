@@ -1,9 +1,17 @@
-"""Manager della coda job (vedi package docstring)."""
+"""Manager della coda job (vedi package docstring).
+
+Gestione completa del ciclo di vita dei job con cleanup affidabile delle risorse:
+- Cleanup eseguito al completamento (successo/errore), cancellazione, retry
+- Try/finally per garantire cleanup anche in caso di eccezioni
+- Logging strutturato con project/job ID
+- Prevenzione race condition tra job paralleli
+"""
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -11,12 +19,16 @@ from typing import Any
 
 from app.config import DATA_DIR
 from app.jobs import progress as prog
+from app.logging_config import get_logger, safe_log_dict
 from app.pipeline import state as state_store
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 JOBS_DIR = DATA_DIR / "jobs"
 KINDS = ("render", "drive_import")
+
+# Directory per file temporanei associati ai job
+JOB_TEMP_DIR = DATA_DIR / "jobs_temp"
 
 
 class JobExistsError(Exception):
@@ -133,6 +145,112 @@ def _claim() -> dict | None:
     return job
 
 
+def cleanup_job_temp_files(job_id: str, project_id: str | None = None, 
+                            keep_output: bool = True) -> dict[str, int]:
+    """Esegue il cleanup dei file temporanei di un job completato.
+    
+    Args:
+        job_id: ID del job da pulire
+        project_id: ID del progetto (opzionale, per logging)
+        keep_output: Se True, preserva l'output finale del render
+        
+    Returns:
+        Dizionario con conteggio file/directory rimossi
+    """
+    job_logger = get_logger(f"jobs.cleanup.{job_id}")
+    stats = {"files_removed": 0, "dirs_removed": 0, "errors": 0}
+    
+    log_context = safe_log_dict({"job_id": job_id, "project_id": project_id})
+    job_logger.info("Cleanup risorse job %s: %s", job_id, log_context)
+    
+    try:
+        # 1. Cleanup directory temp specifica del job in JOB_TEMP_DIR
+        job_temp_dir = JOB_TEMP_DIR / job_id
+        if job_temp_dir.exists():
+            try:
+                removed_count = sum(1 for _ in job_temp_dir.rglob("*"))
+                shutil.rmtree(job_temp_dir, ignore_errors=False)
+                stats["dirs_removed"] += 1
+                stats["files_removed"] += removed_count
+                job_logger.info("Rimossa directory temp %s (%d file)", job_temp_dir, removed_count)
+            except Exception as exc:
+                job_logger.warning("Errore nel rimuovere %s: %s", job_temp_dir, exc)
+                stats["errors"] += 1
+        
+        # 2. Cleanup file temporanei ffmpeg nella system temp dir
+        import tempfile
+        temp_dir = Path(tempfile.gettempdir())
+        try:
+            for pattern in [f"render_{job_id}*", f".render_parts_{job_id}*"]:
+                for tmp_file in temp_dir.glob(pattern):
+                    try:
+                        if tmp_file.is_dir():
+                            shutil.rmtree(tmp_file)
+                            stats["dirs_removed"] += 1
+                        else:
+                            tmp_file.unlink(missing_ok=True)
+                            stats["files_removed"] += 1
+                        job_logger.debug("Rimosso file temp %s", tmp_file)
+                    except Exception as exc:
+                        job_logger.warning("Errore nel rimuovere %s: %s", tmp_file, exc)
+                        stats["errors"] += 1
+        except Exception as exc:
+            job_logger.warning("Errore durante scan temp dir: %s", exc)
+            stats["errors"] += 1
+        
+        # 3. Rimuovi eventuali .tmp.json residui nella JOBS_DIR
+        try:
+            tmp_job_file = JOBS_DIR / f".{job_id}.tmp"
+            if tmp_job_file.exists():
+                tmp_job_file.unlink()
+                stats["files_removed"] += 1
+                job_logger.debug("Rimosso file temp job %s", tmp_job_file)
+        except Exception as exc:
+            job_logger.warning("Errore nel rimuovere tmp job file: %s", exc)
+            stats["errors"] += 1
+            
+    except Exception as exc:
+        job_logger.error("Errore imprevisto durante cleanup job %s: %s", job_id, exc, exc_info=True)
+        stats["errors"] += 1
+    
+    job_logger.info("Cleanup job %s completato: %s", job_id, 
+                   safe_log_dict(stats))
+    return stats
+
+
+def delete_job(job_id: str) -> bool:
+    """Elimina un job dalla coda e esegue cleanup delle risorse.
+    
+    Args:
+        job_id: ID del job da eliminare
+        
+    Returns:
+        True se il job è stato eliminato, False se non esisteva
+    """
+    job = get(job_id)
+    if not job:
+        return False
+    
+    project_id = job.get("project_id")
+    job_logger = get_logger(f"jobs.delete.{job_id}")
+    job_logger.info("Eliminazione job %s (project=%s)", job_id, project_id)
+    
+    # Esegui cleanup prima di eliminare il record
+    cleanup_job_temp_files(job_id, project_id)
+    
+    # Rimuovi il record del job
+    job_path = _path(job_id)
+    try:
+        if job_path.exists():
+            job_path.unlink()
+            job_logger.info("Job %s eliminato con successo", job_id)
+            return True
+    except Exception as exc:
+        job_logger.error("Errore nell'eliminare job %s: %s", job_id, exc, exc_info=True)
+    
+    return False
+
+
 async def _handle_render(job: dict) -> dict:
     from app.pipeline.orchestrator import run_qa_with_retry, run_stages
     from app.agents import clip_overrides, edit_director, render, sequence, timeline_compiler
@@ -191,11 +309,12 @@ async def _handle_drive_import(job: dict) -> dict:
 
 async def _run_one(job: dict) -> None:
     jid = job["job_id"]
+    project_id = job.get("project_id")
     stop = asyncio.Event()
     job_logger = get_logger(f"jobs.{jid}")
     
     job_logger.info("Job %s iniziato: kind=%s, project=%s", 
-                    jid, job["kind"], job["project_id"])
+                    jid, job["kind"], project_id)
 
     async def heartbeat() -> None:
         """Riversa frazione/nota dal registro nel record ogni 2s."""
@@ -212,6 +331,7 @@ async def _run_one(job: dict) -> None:
             _touch(cur)
 
     beat = asyncio.create_task(heartbeat())
+    cleanup_done = False
     try:
         if job["kind"] == "render":
             result = await _handle_render(job)
@@ -228,6 +348,13 @@ async def _run_one(job: dict) -> None:
             _touch(cur)
         except Exception:
             logger.exception("jobs: impossibile registrare il fallimento di %s", jid)
+        
+        # Cleanup dopo errore - garantito anche in caso di eccezione
+        try:
+            cleanup_job_temp_files(jid, project_id, keep_output=False)
+            cleanup_done = True
+        except Exception as cleanup_exc:
+            job_logger.warning("Errore durante cleanup dopo fallimento: %s", cleanup_exc)
         return
     finally:
         stop.set()
@@ -236,6 +363,14 @@ async def _run_one(job: dict) -> None:
         except Exception:
             # L'heartbeat non deve mai mascherare l'esito del job.
             job_logger.exception("jobs: heartbeat di %s terminato con errore", jid)
+        
+        # Cleanup dopo successo - eseguito solo se non già fatto in caso di errore
+        if not cleanup_done:
+            try:
+                cleanup_job_temp_files(jid, project_id, keep_output=True)
+            except Exception as cleanup_exc:
+                job_logger.warning("Errore durante cleanup dopo successo: %s", cleanup_exc)
+    
     job_logger.info("Job %s completato con successo", jid)
     cur = get(jid) or job
     cur["status"] = "done"

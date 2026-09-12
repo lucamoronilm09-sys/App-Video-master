@@ -6,46 +6,73 @@ on:
   pull_request:
     branches: ["main"]
 
+env:
+  # Environment variables globali per la CI
+  APP_ENV: testing
+  LOG_LEVEL: DEBUG
+  NEXT_PUBLIC_API_URL: http://localhost:8000
+
 jobs:
   backend:
     runs-on: ubuntu-latest
+    env:
+      APP_ENV: testing
+      LOG_LEVEL: DEBUG
+      DATA_DIR: /tmp/app-data
     steps:
       - uses: actions/checkout@v4
+      
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      
       - name: Install pip-tools
         run: python -m pip install pip-tools
+      
       - name: Install backend dependencies (pinned versions)
         run: python -m pip install -r backend/requirements.txt
+      
       - name: Verify requirements.in compiles correctly
         run: cd backend && pip-compile requirements.in --output-file requirements.txt --dry-run
+      
+      - name: Create data directory for tests
+        run: mkdir -p /tmp/app-data
+      
       - name: Run backend tests with coverage
         working-directory: backend
         run: pytest --cov=app --cov-report=term --cov-fail-under=70
 
   frontend:
     runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      NEXT_PUBLIC_API_URL: http://localhost:8000
     steps:
       - uses: actions/checkout@v4
+      
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+      
       - name: Lint
         working-directory: frontend
         run: npm run lint
+      
       - name: Run frontend tests
         working-directory: frontend
         run: npm run test
+      
       - name: Production build
         working-directory: frontend
         run: npm run build
@@ -59,8 +86,55 @@ jobs:
       - name: Build backend Docker image
         run: docker build -t app-video-backend ./backend
       
-      - name: Build frontend Docker image
-        run: docker build -t app-video-frontend ./frontend
+      - name: Build frontend Docker image (production target)
+        run: docker build --target production -t app-video-frontend ./frontend
       
-      - name: Verify docker-compose configuration
-        run: docker-compose config
+      - name: Verify docker-compose configuration (development)
+        run: docker compose config
+      
+      - name: Verify docker-compose configuration (testing)
+        run: docker compose -f docker-compose.yml -f docker-compose.test.yml config
+      
+      - name: Verify docker-compose configuration (production)
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml config
+      
+      - name: Verify docker-compose configuration (staging)
+        run: docker compose -f docker-compose.yml -f docker-compose.staging.yml config
+
+  docker-test-env:
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    name: Docker Integration Test
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Start test environment
+        run: docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
+      
+      - name: Wait for services to be healthy
+        run: |
+          echo "Waiting for backend..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:8000/api/health > /dev/null; then
+              echo "Backend is ready!"
+              break
+            fi
+            sleep 2
+          done
+          
+          echo "Waiting for frontend..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:3000/api/health > /dev/null; then
+              echo "Frontend is ready!"
+              break
+            fi
+            sleep 2
+          done
+      
+      - name: Verify services are running
+        run: |
+          curl -sf http://localhost:8000/api/health
+          curl -sf http://localhost:3000/api/health
+      
+      - name: Stop test environment
+        run: docker compose -f docker-compose.yml -f docker-compose.test.yml down -v
