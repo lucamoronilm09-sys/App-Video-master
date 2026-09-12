@@ -23,6 +23,8 @@ jobs:
       DATA_DIR: /tmp/app-data
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -62,6 +64,8 @@ jobs:
       NEXT_PUBLIC_API_URL: /api
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -108,6 +112,8 @@ jobs:
     needs: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
 
       - name: Build backend Docker image
         run: docker build -t app-video-backend ./backend
@@ -133,6 +139,8 @@ jobs:
     name: Docker Integration Test
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
 
       - name: Start test environment
         run: docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
