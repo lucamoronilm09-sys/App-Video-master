@@ -1,4 +1,3 @@
-```
 # Dependencies
 node_modules/
 
@@ -6,6 +5,8 @@ node_modules/
 dist/
 build/
 target/
+.next/
+out/
 
 # Logs and temp files
 *.log
@@ -13,8 +14,8 @@ target/
 
 # Environment
 .env
-.env.local
-*.env.*
+.env.*
+!.env.example
 
 # Editors
 .vscode/
@@ -22,7 +23,8 @@ target/
 
 # Python
 __pycache__/
-*.pyc
+**/__pycache__/
+*.py[cod]
 *.pyo
 *.pyd
 
@@ -60,4 +62,3 @@ htmlcov/
 *.tar.bz2
 *.tar.xz
 *.tar.zst
-```
