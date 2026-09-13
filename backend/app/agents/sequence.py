@@ -21,6 +21,8 @@ from typing import Any
 from app.services.vision_analyzer import analyze_photo
 
 MAX_VIDEO_SEC = 8.0
+PHOTO_MIN_SEC = 2.0
+PHOTO_MAX_SEC = 7.0
 PROVISIONAL_PHOTO_SEC = 3.5
 
 
@@ -28,12 +30,8 @@ async def _analyze_one_photo(item: dict[str, Any]) -> dict[str, Any]:
     path = Path(str(item.get("path", "")))
     if not path.is_file():
         profile = {
-            "ai_used": False,
-            "vision_provider": "unavailable",
-            "importance": 0.5,
-            "emotional_intensity": 0.5,
-            "subject_clarity": 0.5,
-            "visual_interest": 0.5,
+            "ai_used": False, "vision_provider": "unavailable", "importance": 0.5,
+            "emotional_intensity": 0.5, "subject_clarity": 0.5, "visual_interest": 0.5,
             "people_count": int(item.get("face_count") or 0),
             "is_group_photo": bool((item.get("face_count") or 0) >= 2),
             "recommended_pacing": "normal",
@@ -43,14 +41,9 @@ async def _analyze_one_photo(item: dict[str, Any]) -> dict[str, Any]:
             profile = await asyncio.to_thread(analyze_photo, path)
         except Exception as exc:
             profile = {
-                "ai_used": False,
-                "vision_provider": "error",
-                "vision_error": str(exc),
-                "importance": 0.5,
-                "emotional_intensity": 0.5,
-                "subject_clarity": 0.5,
-                "visual_interest": 0.5,
-                "people_count": int(item.get("face_count") or 0),
+                "ai_used": False, "vision_provider": "error", "vision_error": str(exc),
+                "importance": 0.5, "emotional_intensity": 0.5, "subject_clarity": 0.5,
+                "visual_interest": 0.5, "people_count": int(item.get("face_count") or 0),
                 "is_group_photo": bool((item.get("face_count") or 0) >= 2),
                 "recommended_pacing": "normal",
             }
@@ -63,11 +56,6 @@ async def _analyze_one_photo(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _provisional_duration(item: dict[str, Any]) -> float:
-    """Durata provvisoria mostrata nell'UI prima che l'audio sia disponibile.
-    
-    Questa durata NON viene usata da Edit Director o Timeline Compiler.
-    Serve solo per mostrare un'anteprima all'utente.
-    """
     profile = item.get("vision_analysis") or {}
     importance = max(0.0, min(1.0, float(profile.get("importance", 0.5))))
     return round(2.5 + 2.0 * importance, 2)
@@ -82,10 +70,8 @@ async def run(project_state: dict) -> dict:
     clips: list[dict[str, Any]] = []
     for item in media_list:
         if item.get("type") == "photo":
-            # Duration_sec per le foto rimane None: verrà deciso dall'Edit Director.
-            # Assegniamo solo provisional_duration_sec per l'UI.
             item["provisional_duration_sec"] = _provisional_duration(item)
-            item["duration_sec"] = None  # Nessuna durata definitiva ancora
+            item["duration_sec"] = None
             item["duration_source"] = "pending_music"
             item["trim_start_sec"] = None
             item["trim_end_sec"] = None
@@ -99,6 +85,5 @@ async def run(project_state: dict) -> dict:
                 item["trim_start_sec"] = None
                 item["trim_end_sec"] = None
         clips.append(dict(item))
-
     project_state["clips"] = clips
     return project_state
